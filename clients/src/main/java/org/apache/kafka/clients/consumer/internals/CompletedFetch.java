@@ -282,6 +282,7 @@ public class CompletedFetch {
 
                 Optional<Integer> leaderEpoch = maybeLeaderEpoch(currentBatch.partitionLeaderEpoch());
                 TimestampType timestampType = currentBatch.timestampType();
+                // 反序列化
                 ConsumerRecord<K, V> record = parseRecord(deserializers, partition, leaderEpoch, timestampType, lastRecord);
                 records.add(record);
                 recordsRead++;

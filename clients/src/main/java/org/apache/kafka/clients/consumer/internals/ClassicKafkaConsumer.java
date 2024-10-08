@@ -165,6 +165,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
             this.clientId = config.getString(CommonClientConfigs.CLIENT_ID_CONFIG);
             LogContext logContext = createLogContext(config, groupRebalanceConfig);
             this.log = logContext.logger(getClass());
+            // 是否自动提交
             boolean enableAutoCommit = config.getBoolean(ENABLE_AUTO_COMMIT_CONFIG);
 
             log.debug("Initializing the Kafka consumer");
@@ -187,14 +188,17 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                     interceptorList,
                     Arrays.asList(this.deserializers.keyDeserializer, this.deserializers.valueDeserializer));
             this.metadata = new ConsumerMetadata(config, subscriptions, logContext, clusterResourceListeners);
+            // 获取服务端地址
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(config);
             this.metadata.bootstrap(addresses);
 
             FetchMetricsManager fetchMetricsManager = createFetchMetricsManager(metrics);
+            // 拉取的配置
             FetchConfig fetchConfig = new FetchConfig(config);
             this.isolationLevel = fetchConfig.isolationLevel;
 
             ApiVersions apiVersions = new ApiVersions();
+            // 网络通信客户端 基于java NIO
             this.client = createConsumerNetworkClient(config,
                     metrics,
                     logContext,
@@ -205,6 +209,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                     retryBackoffMs,
                     clientTelemetryReporter.map(ClientTelemetryReporter::telemetrySender).orElse(null));
 
+            // 分区分配器
             this.assignors = ConsumerPartitionAssignor.getAssignorInstances(
                     config.getList(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG),
                     config.originals(Collections.singletonMap(ConsumerConfig.CLIENT_ID_CONFIG, clientId))
@@ -216,6 +221,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                 config.ignore(THROW_ON_FETCH_STABLE_OFFSET_UNSUPPORTED);
                 this.coordinator = null;
             } else {
+                // 消费者协调者
                 this.coordinator = new ConsumerCoordinator(groupRebalanceConfig,
                         logContext,
                         this.client,
@@ -232,6 +238,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                         config.getString(ConsumerConfig.CLIENT_RACK_CONFIG),
                         clientTelemetryReporter);
             }
+            // 消息拉取器
             this.fetcher = new Fetcher<>(
                     logContext,
                     this.client,
@@ -483,6 +490,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                 // Clear the buffered data which are not a part of newly assigned topics
                 final Set<TopicPartition> currentTopicPartitions = new HashSet<>();
 
+                // 清除之前
                 for (TopicPartition tp : subscriptions.assignedPartitions()) {
                     if (topics.contains(tp.topic()))
                         currentTopicPartitions.add(tp);
@@ -491,6 +499,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                 fetcher.clearBufferedDataForUnassignedPartitions(currentTopicPartitions);
 
                 log.info("Subscribed to topic(s): {}", String.join(", ", topics));
+                // 订阅
                 if (this.subscriptions.subscribe(new HashSet<>(topics), listener))
                     metadata.requestUpdateForNewTopics();
             }
@@ -625,6 +634,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
 
                 if (includeMetadataInTimeout) {
                     // try to update assignment metadata BUT do not need to block on the timer for join group
+                    // 自动提交offset
                     updateAssignmentMetadataIfNeeded(timer, false);
                 } else {
                     while (!updateAssignmentMetadataIfNeeded(time.timer(Long.MAX_VALUE), true)) {
@@ -640,6 +650,9 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                     //
                     // NOTE: since the consumed position has already been updated, we must not allow
                     // wakeups or any other errors to be triggered prior to returning the fetched records.
+                    // 返回之前，再次触发poll 去服务端请求，方便下次使用CompleteFetch 缓存
+                    // 1. sendFetches() > 0
+                    // 2. unset 或 in-flight中有请求
                     if (sendFetches() > 0 || client.hasPendingRequests()) {
                         client.transmitSends();
                     }
@@ -649,6 +662,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                                 + "since the consumer's position has advanced for at least one topic partition");
                     }
 
+                    // 消费端拦截器处理
                     return this.interceptors.onConsume(new ConsumerRecords<>(fetch.records()));
                 }
             } while (timer.notExpired());
@@ -687,6 +701,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
         }
 
         // send any new fetches (won't resend pending fetches)
+        // 服务端拉取，请求暂存unset
         sendFetches();
 
         // We do not want to be stuck blocking in poll if we are missing some positions
@@ -700,6 +715,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
 
         log.trace("Polling for fetches with timeout {}", pollTimeout);
 
+        // poll手动触发真实发送请求
         Timer pollTimer = time.timer(pollTimeout);
         client.poll(pollTimer, () -> {
             // since a fetch might be completed by the background thread, we need this poll condition

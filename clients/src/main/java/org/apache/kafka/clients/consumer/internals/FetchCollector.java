@@ -103,6 +103,7 @@ public class FetchCollector<K, V> {
                 if (nextInLineFetch == null || nextInLineFetch.isConsumed()) {
                     final CompletedFetch completedFetch = fetchBuffer.peek();
 
+                    // 没有数据 返回
                     if (completedFetch == null)
                         break;
 
@@ -175,6 +176,7 @@ public class FetchCollector<K, V> {
 
                 boolean positionAdvanced = false;
 
+                // 大于tp的offset就更新
                 if (nextInLineFetch.nextFetchOffset() > position.offset) {
                     SubscriptionState.FetchPosition nextPosition = new SubscriptionState.FetchPosition(
                             nextInLineFetch.nextFetchOffset(),
@@ -182,6 +184,7 @@ public class FetchCollector<K, V> {
                             position.currentLeader);
                     log.trace("Updating fetch position from {} to {} for partition {} and returning {} records from `poll()`",
                             position, nextPosition, tp, partRecords.size());
+                    // 设置内存的offset
                     subscriptions.position(tp, nextPosition);
                     positionAdvanced = true;
                 }

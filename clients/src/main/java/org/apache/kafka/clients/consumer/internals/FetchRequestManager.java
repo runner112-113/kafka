@@ -72,6 +72,7 @@ public class FetchRequestManager extends AbstractFetch implements RequestManager
     public PollResult poll(long currentTimeMs) {
         return pollInternal(
                 prepareFetchRequests(),
+                // fetch 成功后的处理
                 this::handleFetchSuccess,
                 this::handleFetchFailure
         );
