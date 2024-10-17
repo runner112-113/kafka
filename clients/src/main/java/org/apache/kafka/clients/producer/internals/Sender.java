@@ -91,6 +91,8 @@ public class Sender implements Runnable {
     private final ProducerMetadata metadata;
 
     /* the flag indicating whether the producer should guarantee the message order on the broker or not. */
+    // max.in.flight.requests.per.connection：
+    // 没有被确认unacknowledge的batch数, 如果设置大于1在retries设置了的情况下会出现消息发送顺序错误
     private final boolean guaranteeMessageOrder;
 
     /* the maximum request size to attempt to send to the server */
@@ -246,6 +248,7 @@ public class Sender implements Runnable {
             transactionManager.setPoisonStateOnInvalidTransition(true);
 
         // main loop, runs until close is called
+        // 主循环，一直运行直到 KafkaProducer 被关闭
         while (running) {
             try {
                 runOnce();
@@ -256,10 +259,15 @@ public class Sender implements Runnable {
 
         log.debug("Beginning shutdown of Kafka producer I/O thread, sending remaining records.");
 
+        /* 如果 KafkaProducer 被关闭，尝试发送剩余的消息 */
+
         // okay we stopped accepting requests but there may still be
         // requests in the transaction manager, accumulator or waiting for acknowledgment,
         // wait until these are completed.
-        while (!forceClose && ((this.accumulator.hasUndrained() || this.client.inFlightRequestCount() > 0) || hasPendingTransactionalRequests())) {
+        // 不是强制关闭
+        while (!forceClose &&
+                // 存在未发送或已发送待响应的请求
+                ((this.accumulator.hasUndrained() || this.client.inFlightRequestCount() > 0) || hasPendingTransactionalRequests())) {
             try {
                 runOnce();
             } catch (Exception e) {
@@ -288,6 +296,7 @@ public class Sender implements Runnable {
             }
         }
 
+        // 如果是强制关闭，忽略所有未发送和已发送待响应的请求
         if (forceClose) {
             // We need to fail all the incomplete transactional requests and batches and wake up the threads waiting on
             // the futures.
@@ -299,6 +308,7 @@ public class Sender implements Runnable {
             this.accumulator.abortIncompleteBatches();
         }
         try {
+            // 关闭网络连接
             this.client.close();
         } catch (Exception e) {
             log.error("Failed to close network client", e);
@@ -345,6 +355,7 @@ public class Sender implements Runnable {
         }
 
         long currentTimeMs = time.milliseconds();
+        // 发送数据
         long pollTimeout = sendProducerData(currentTimeMs);
         client.poll(pollTimeout, currentTimeMs);
     }
@@ -364,11 +375,14 @@ public class Sender implements Runnable {
     }
 
     private long sendProducerData(long now) {
+        // 1. 计算需要以及可以向哪些节点发送请求
         MetadataSnapshot metadataSnapshot = metadata.fetchMetadataSnapshot();
         // get the list of partitions with data ready to send
+        // 计算需要向哪些节点发送请求
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(metadataSnapshot, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
+        // 2. 如果存在未知的 leader 副本对应的节点（对应的 topic 分区正在执行 leader 选举，或者对应的 topic 已经失效），标记需要更新缓存的集群元数据信息
         if (!result.unknownLeaderTopics.isEmpty()) {
             // The set of topics with unknown leader contains topics with leader election pending as well as
             // topics which may have expired. Add the topic again to metadata to ensure it is included
@@ -382,15 +396,18 @@ public class Sender implements Runnable {
         }
 
         // remove any nodes we aren't ready to send to
+        // 3. 遍历处理待发送请求的目标节点，基于网络 IO 检查对应节点是否可用，对于不可用的节点则剔除
         Iterator<Node> iter = result.readyNodes.iterator();
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
             Node node = iter.next();
+            // 3. 遍历处理待发送请求的目标节点，基于网络 IO 检查对应节点是否可用，对于不可用的节点则剔除
             if (!this.client.ready(node, now)) {
                 // Update just the readyTimeMs of the latency stats, so that it moves forward
                 // every time the batch is ready (then the difference between readyTimeMs and
                 // drainTimeMs would represent how long data is waiting for the node).
                 this.accumulator.updateNodeLatencyStats(node.id(), now, false);
+                // 移除
                 iter.remove();
                 notReadyTimeout = Math.min(notReadyTimeout, this.client.pollDelayMs(node, now));
             } else {
@@ -401,16 +418,22 @@ public class Sender implements Runnable {
         }
 
         // create produce requests
+        // 4. 获取每个节点待发送消息集合，其中 key 是目标 leader 副本所在节点 ID
         Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(metadataSnapshot, result.readyNodes, this.maxRequestSize, now);
+        // 添加到inFlightBatches
         addToInflightBatches(batches);
+        // 5. 如果需要保证消息的强顺序性，则缓存对应 topic 分区对象，防止同一时间往同一个 topic 分区发送多条处于未完成状态的消息
         if (guaranteeMessageOrder) {
             // Mute all the partitions drained
+            // 将所有 RecordBatch 的 topic 分区对象加入到 muted 集合中
+            // 防止同一时间往同一个 topic 分区发送多条处于未完成状态的消息
             for (List<ProducerBatch> batchList : batches.values()) {
                 for (ProducerBatch batch : batchList)
                     this.accumulator.mutePartition(batch.topicPartition);
             }
         }
 
+        // 6. 处理本地过期的消息，返回 TimeoutException，并释放空间
         accumulator.resetNextBatchExpiryTime();
         List<ProducerBatch> expiredInflightBatches = getExpiredInflightBatches(now);
         List<ProducerBatch> expiredBatches = this.accumulator.expiredBatches(now);
@@ -437,6 +460,7 @@ public class Sender implements Runnable {
         // time, and the delay time for checking data availability. Note that the nodes may have data that isn't yet
         // sendable due to lingering, backing off, etc. This specifically does not include nodes with sendable data
         // that aren't ready to send since they would cause busy looping.
+        // 如果存在待发送的消息，则设置 pollTimeout 等于 0，这样可以立即发送请求，从而能够缩短剩余消息的缓存时间，避免堆积
         long pollTimeout = Math.min(result.nextReadyCheckDelayMs, notReadyTimeout);
         pollTimeout = Math.min(pollTimeout, this.accumulator.nextExpiryTimeMs() - now);
         pollTimeout = Math.max(pollTimeout, 0);
@@ -448,6 +472,8 @@ public class Sender implements Runnable {
             // otherwise the select time will be the time difference between now and the metadata expiry time;
             pollTimeout = 0;
         }
+        // 7. 发送请求到服务端，并处理服务端响应
+        // 构建ProduceRequest 存入unset
         sendProduceRequests(batches, now);
         return pollTimeout;
     }
@@ -681,6 +707,7 @@ public class Sender implements Runnable {
             maybeRemoveAndDeallocateBatch(batch);
             this.sensors.recordBatchSplit();
         } else if (error != Errors.NONE) {
+            // 重试，当max.in.flight.requests.per.connection >1 时保证不了消息的生产有序性
             if (canRetry(batch, response, now)) {
                 log.warn(
                     "Got error produce response with correlation id {} on topic-partition {}, retrying ({} attempts left). Error: {}",
@@ -688,6 +715,7 @@ public class Sender implements Runnable {
                     batch.topicPartition,
                     this.retries - batch.attempts() - 1,
                     formatErrMsg(response));
+                // 将消息重新添加到收集器中，等待再次发送
                 reenqueueBatch(batch, now);
             } else if (error == Errors.DUPLICATE_SEQUENCE_NUMBER) {
                 // If we have received a duplicate sequence error, it means that the sequence number has advanced beyond
@@ -722,10 +750,12 @@ public class Sender implements Runnable {
                 metadata.requestUpdate(false);
             }
         } else {
+            // 将响应信息传递给用户，并释放 RecordBatch 占用的空间
             completeBatch(batch, response);
         }
 
         // Unmute the completed partition.
+        // 释放已经处理完成的 topic 分区，对于需要保证消息强顺序性，以允许接收下一条消息
         if (guaranteeMessageOrder)
             this.accumulator.unmutePartition(batch.topicPartition);
     }
@@ -751,6 +781,7 @@ public class Sender implements Runnable {
             transactionManager.handleCompletedBatch(batch, response);
         }
 
+        // 将响应信息传递给用户，并释放 RecordBatch 占用的空间
         if (batch.complete(response.baseOffset, response.logAppendTime)) {
             maybeRemoveAndDeallocateBatch(batch);
         }
@@ -914,6 +945,7 @@ public class Sender implements Runnable {
                         .setTimeoutMs(timeout)
                         .setTransactionalId(transactionalId)
                         .setTopicData(tpd));
+        // 响应回调
         RequestCompletionHandler callback = response -> handleProduceResponse(response, recordsByPartition, time.milliseconds());
 
         String nodeId = Integer.toString(destination);

@@ -66,11 +66,16 @@ import static org.apache.kafka.common.record.RecordBatch.NO_PARTITION_LEADER_EPO
  */
 public class Metadata implements Closeable {
     private final Logger log;
+    // 元数据最小更新时间间隔，默认是 100 毫秒，防止更新太频繁
     private final ExponentialBackoff refreshBackoff;
+    // 元数据更新时间间隔，默认为 5 分钟
     private final long metadataExpireMs;
+    // 元数据版本号，每更新成功一次则版本号加 1
     private int updateVersion;  // bumped on every metadata response
     private int requestVersion; // bumped on every new topic addition
+    // 上一次更新元数据的时间戳，不管成功还是失败
     private long lastRefreshMs;
+    // 上一次成功更新元数据的时间戳
     private long lastSuccessfulRefreshMs;
     private long attempts;
     private KafkaException fatalException;
@@ -78,6 +83,7 @@ public class Metadata implements Closeable {
     private Set<String> unauthorizedTopics;
     private volatile MetadataSnapshot metadataSnapshot = MetadataSnapshot.empty();
     private boolean needFullUpdate;
+    // 部分更新
     private boolean needPartialUpdate;
     private long equivalentResponseCount;
     private final ClusterResourceListeners clusterResourceListeners;

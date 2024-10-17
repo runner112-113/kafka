@@ -126,6 +126,7 @@ public class FetchCollector<K, V> {
                     }
 
                     fetchBuffer.poll();
+                    // 分区处于暂停状态
                 } else if (subscriptions.isPaused(nextInLineFetch.partition)) {
                     // when the partition is paused we add the records back to the completedFetches queue instead of draining
                     // them so that they can be returned on a subsequent poll if the partition is resumed at that time
@@ -167,6 +168,7 @@ public class FetchCollector<K, V> {
                 throw new IllegalStateException("Missing position for fetchable partition " + tp);
 
             if (nextInLineFetch.nextFetchOffset() == position.offset) {
+                // 准换为ConsumerRecord
                 List<ConsumerRecord<K, V>> partRecords = nextInLineFetch.fetchRecords(fetchConfig,
                         deserializers,
                         maxRecords);

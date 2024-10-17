@@ -590,24 +590,42 @@ public class NetworkClient implements KafkaClient {
             return responses;
         }
 
+        /*
+         * 如果距离上次更新超过指定时间，且存在负载小的目标节点，
+         * 则创建 MetadataRequest 请求更新本地缓存的集群元数据信息，并在下次执行 poll 操作时一并送出
+         */
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         long telemetryTimeout = telemetrySender != null ? telemetrySender.maybeUpdate(now) : Integer.MAX_VALUE;
+        // 发送网络请求
         try {
             this.selector.poll(Utils.min(timeout, metadataTimeout, telemetryTimeout, defaultRequestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);
         }
 
+        /* 处理服务端响应 */
         // process completed actions
         long updatedNow = this.time.milliseconds();
         List<ClientResponse> responses = new ArrayList<>();
+        // 对于发送成功且不期望服务端响应的请求，创建本地的响应对象添加到 responses 队列中
         handleCompletedSends(responses, updatedNow);
+        /*
+         * 获取并解析服务端响应
+         * - 如果是更新集群元数据对应的响应，则更新本地缓存的集群元数据信息
+         * - 如果是更新 API 版本的响应，则更新本地缓存的目标节点支持的 API 版本信息
+         * - 否则，获取 ClientResponse 添加到 responses 队列中
+         */
         handleCompletedReceives(responses, updatedNow);
+        // 处理连接断开的请求，构建对应的 ClientResponse 添加到 responses 列表中，并标记需要更新集群元数据信息
         handleDisconnections(responses, updatedNow);
+        // 处理 connections 列表，更新相应节点的连接状态
         handleConnections();
+        // 如果需要更新本地的 API 版本信息，则创建对应的 ApiVersionsRequest 请求，并在下次执行 poll 操作时一并送出
         handleInitiateApiVersionRequests(updatedNow);
         handleTimedOutConnections(responses, updatedNow);
+        // 遍历获取 inFlightRequests 中的超时请求，构建对应的 ClientResponse 添加到 responses 列表中，并标记需要更新集群元数据信息
         handleTimedOutRequests(responses, updatedNow);
+        // 处理响应：触发RequestCompletionHandler#onComplete
         completeResponses(responses);
 
         return responses;
@@ -909,6 +927,7 @@ public class NetworkClient implements KafkaClient {
         // if no response is expected then when the send is completed, return it
         for (NetworkSend send : this.selector.completedSends()) {
             InFlightRequest request = this.inFlightRequests.lastSent(send.destinationId());
+            // 不期望服务端恢复
             if (!request.expectResponse) {
                 this.inFlightRequests.completeLastSent(send.destinationId());
                 responses.add(request.completed(null, now));
@@ -944,6 +963,7 @@ public class NetworkClient implements KafkaClient {
     private void handleCompletedReceives(List<ClientResponse> responses, long now) {
         for (NetworkReceive receive : this.selector.completedReceives()) {
             String source = receive.source();
+            // 从inFlightRequests中弹出响应的InFlightRequest
             InFlightRequest req = inFlightRequests.completeNext(source);
 
             AbstractResponse response = parseResponse(receive.payload(), req.header);
@@ -957,8 +977,10 @@ public class NetworkClient implements KafkaClient {
 
             // If the received response includes a throttle delay, throttle the connection.
             maybeThrottle(response, req.header.apiVersion(), req.destination, now);
+            //  更新集群元数据对应的响应，则更新本地缓存的集群元数据信息
             if (req.isInternalRequest && response instanceof MetadataResponse)
                 metadataUpdater.handleSuccessfulResponse(req.header, now, (MetadataResponse) response);
+            // 更新 API 版本的响应，则更新本地缓存的目标节点支持的 API 版本信息
             else if (req.isInternalRequest && response instanceof ApiVersionsResponse)
                 handleApiVersionsResponse(responses, req, now, (ApiVersionsResponse) response);
             else if (req.isInternalRequest && response instanceof GetTelemetrySubscriptionsResponse)
@@ -966,6 +988,7 @@ public class NetworkClient implements KafkaClient {
             else if (req.isInternalRequest && response instanceof PushTelemetryResponse)
                 telemetrySender.handleResponse((PushTelemetryResponse) response);
             else
+                // 其他，获取 ClientResponse 添加到 responses 队列中
                 responses.add(req.completed(response, now));
         }
     }
@@ -1148,6 +1171,7 @@ public class NetworkClient implements KafkaClient {
 
             // Beware that the behavior of this method and the computation of timeouts for poll() are
             // highly dependent on the behavior of leastLoadedNode.
+            // 最小负载的node
             LeastLoadedNode leastLoadedNode = leastLoadedNode(now);
 
             // Rebootstrap if needed and configured.

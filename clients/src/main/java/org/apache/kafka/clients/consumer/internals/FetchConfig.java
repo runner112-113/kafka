@@ -29,11 +29,17 @@ import static org.apache.kafka.clients.consumer.internals.ConsumerUtils.configur
  */
 public class FetchConfig {
 
+    // 服务端返回的消息并不是立即响应，而是累积到 minBytes 再响应
     public final int minBytes;
+    // 请求时指定的服务端最大响应字节数
     public final int maxBytes;
+    // 累积等待的最大时长，达到该时间时，即使消息数据量不够，也会执行响应
     public final int maxWaitMs;
+    // 每次 fetch 操作的最大字节数
     public final int fetchSize;
+    // 每次获取 record 的最大数量
     public final int maxPollRecords;
+    // 是否对结果执行 CRC 校验
     public final boolean checkCrcs;
     public final String clientRackId;
     public final IsolationLevel isolationLevel;

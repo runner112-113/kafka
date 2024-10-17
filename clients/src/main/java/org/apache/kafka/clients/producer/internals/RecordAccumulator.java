@@ -71,24 +71,38 @@ public class RecordAccumulator {
 
     private final LogContext logContext;
     private final Logger log;
+    // 标识当前收集器是否被关闭，对应 producer 被关闭
     private volatile boolean closed;
+    // 记录正在执行 flush 操作的线程数
     private final AtomicInteger flushesInProgress;
+    // 记录正在执行 append 操作的线程数
     private final AtomicInteger appendsInProgress;
+    // 指定每个 RecordBatch 中 ByteBuffer 的大小
     private final int batchSize;
+    // 消息压缩类型
     private final Compression compression;
+    // 过参数 linger.ms 指定，当本地消息缓存时间超过该值时，即使消息量未达到阈值也会进行投递
     private final int lingerMs;
+    // 生产者重试时间间隔
     private final ExponentialBackoff retryBackoff;
     private final int deliveryTimeoutMs;
     private final long partitionAvailabilityTimeoutMs;  // latency threshold for marking partition temporary unavailable
     private final boolean enableAdaptivePartitioning;
+    // 缓存（ByteBuffer）管理工具
     private final BufferPool free;
     private final Time time;
     private final ApiVersions apiVersions;
     private final ConcurrentMap<String /*topic*/, TopicInfo> topicInfoMap = new CopyOnWriteMap<>();
     private final ConcurrentMap<Integer /*nodeId*/, NodeLatencyStats> nodeStats = new CopyOnWriteMap<>();
+    // 记录未发送完成（即未收到服务端响应）的消息集合
     private final IncompleteBatches incomplete;
     // The following variables are only accessed by the sender thread, so we don't need to protect them.
+    /**
+     * 消息顺序性保证，
+     * 缓存当前待发送消息的目标 topic 分区，防止对于同一个 topic 分区同时存在多个未完成的消息，可能导致消息顺序性错乱
+     */
     private final Set<TopicPartition> muted;
+    // 记录 drain 方法批量导出消息时上次的偏移量
     private final Map<String, Integer> nodesDrainIndex;
     private final TransactionManager transactionManager;
     private long nextBatchExpiryTimeMs = Long.MAX_VALUE; // the earliest time (absolute) a batch will expire.
@@ -298,6 +312,7 @@ public class RecordAccumulator {
 
         // We keep track of the number of appending thread to make sure we do not miss batches in
         // abortIncompleteBatches().
+        // 记录正在向收集器中追加消息的线程数
         appendsInProgress.incrementAndGet();
         ByteBuffer buffer = null;
         if (headers == null) headers = Record.EMPTY_HEADERS;
@@ -322,20 +337,25 @@ public class RecordAccumulator {
                 setPartition(callbacks, effectivePartition);
 
                 // check if we have an in-progress batch
+                // 获取当前 topic 分区对应的 Deque，如果不存在则创建一个
                 Deque<ProducerBatch> dq = topicInfo.batches.computeIfAbsent(effectivePartition, k -> new ArrayDeque<>());
                 synchronized (dq) {
                     // After taking the lock, validate that the partition hasn't changed and retry.
                     if (partitionChanged(topic, topicInfo, partitionInfo, dq, nowMs, cluster))
                         continue;
 
+                    // 向 Deque 中最后一个 RecordBatch 追加 Record，并返回对应的 RecordAppendResult 对象
                     RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callbacks, dq, nowMs);
                     if (appendResult != null) {
                         // If queue has incomplete batches we disable switch (see comments in updatePartitionInfo).
                         boolean enableSwitch = allBatchesFull(dq);
                         topicInfo.builtInPartitioner.updatePartitionInfo(partitionInfo, appendResult.appendedBytes, cluster, enableSwitch);
+                        // 追加成功，直接返回
                         return appendResult;
                     }
                 }
+
+                /* 追加 Record 失败，尝试申请新的 buffer */
 
                 // we don't have an in-progress record batch try to allocate a new batch
                 if (abortOnNewBatch) {
@@ -343,11 +363,13 @@ public class RecordAccumulator {
                     return new RecordAppendResult(null, false, false, true, 0);
                 }
 
+                // 申请新的 buffer
                 if (buffer == null) {
                     byte maxUsableMagic = apiVersions.maxUsableProduceMagic();
                     int size = Math.max(this.batchSize, AbstractRecords.estimateSizeInBytesUpperBound(maxUsableMagic, compression.type(), key, value, headers));
                     log.trace("Allocating a new {} byte message buffer for topic {} partition {} with remaining timeout {}ms", size, topic, effectivePartition, maxTimeToBlock);
                     // This call may block if we exhausted buffer space.
+                    // 申请新的 buffer
                     buffer = free.allocate(size, maxTimeToBlock);
                     // Update the current time in case the buffer allocation blocked above.
                     // NOTE: getting time may be expensive, so calling it under a lock
@@ -1264,6 +1286,7 @@ public class RecordAccumulator {
      * Per topic info.
      */
     private static class TopicInfo {
+        // 发往同一个topic分区的ProducerBatch
         public final ConcurrentMap<Integer /*partition*/, Deque<ProducerBatch>> batches = new CopyOnWriteMap<>();
         public final BuiltInPartitioner builtInPartitioner;
 

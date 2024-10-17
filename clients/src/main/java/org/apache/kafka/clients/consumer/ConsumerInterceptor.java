@@ -64,6 +64,8 @@ public interface ConsumerInterceptor<K, V> extends Configurable, AutoCloseable {
      *
      * @param records records to be consumed by the client or records returned by the previous interceptors in the list.
      * @return records that are either modified by the interceptor or same as records passed to this method.
+     *
+     * 在消息数据被返回给应用程序之前执行
      */
     ConsumerRecords<K, V> onConsume(ConsumerRecords<K, V> records);
 
@@ -73,6 +75,7 @@ public interface ConsumerInterceptor<K, V> extends Configurable, AutoCloseable {
      * Any exception thrown by this method will be ignored by the caller.
      *
      * @param offsets A map of offsets by partition with associated metadata
+     * 在 offset 成功提交后被调用
      */
     void onCommit(Map<TopicPartition, OffsetAndMetadata> offsets);
 

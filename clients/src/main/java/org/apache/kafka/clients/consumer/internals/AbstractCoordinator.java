@@ -470,6 +470,11 @@ public abstract class AbstractCoordinator implements Closeable {
                 // exception, in which case upon retry we should not retry onJoinPrepare either.
                 needsJoinPrepare = false;
                 // return false when onJoinPrepare is waiting for committing offset
+                /*
+                 * 1. 如果开启了 offset 自动提交，则同步提交 offset
+                 * 2. 调用注册的 ConsumerRebalanceListener 监听器的 onPartitionsRevoked 方法
+                 * 3. 取消当前消费者的 leader 身份（如果是的话），恢复成为一个普通的消费者
+                 */
                 if (!onJoinPrepare(timer, generation.generationId, generation.memberId)) {
                     needsJoinPrepare = true;
                     //should not initiateJoinGroup if needsJoinPrepare still is true
@@ -477,6 +482,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 }
             }
 
+            // 创建并发送 JoinGroupRequest 请求，申请加入目标 group
             final RequestFuture<ByteBuffer> future = initiateJoinGroup();
             client.poll(future, timer);
             if (!future.isDone()) {
@@ -484,6 +490,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 return false;
             }
 
+            // 执行分区分配成功
             if (future.succeeded()) {
                 Generation generationSnapshot;
                 MemberState stateSnapshot;
@@ -507,6 +514,7 @@ public abstract class AbstractCoordinator implements Closeable {
                     // we can only reset the join group future after the completion callback returns. This ensures
                     // that if the callback is woken up, we will retry it on the next joinGroupIfNeeded.
                     // And because of that we should explicitly trigger resetJoinGroupFuture in other conditions below.
+                    // 申请加入 group 完成，将 joinFuture 置为 null，表示允许发送下一次 JoinGroupRequest 请求
                     resetJoinGroupFuture();
                     needsJoinPrepare = true;
                 } else {
@@ -518,6 +526,7 @@ public abstract class AbstractCoordinator implements Closeable {
                     resetJoinGroupFuture();
                 }
             } else {
+                // 执行分区分配失败，依据失败类型考虑是否重试
                 final RuntimeException exception = future.exception();
 
                 resetJoinGroupFuture();
@@ -567,6 +576,7 @@ public abstract class AbstractCoordinator implements Closeable {
             // in this case we would not update the start time.
             if (lastRebalanceStartMs == -1L)
                 lastRebalanceStartMs = time.milliseconds();
+            // 发送JoinGroupRequest
             joinFuture = sendJoinGroupRequest();
             joinFuture.addListener(new RequestFutureListener<ByteBuffer>() {
                 @Override
@@ -667,6 +677,7 @@ public abstract class AbstractCoordinator implements Closeable {
                             clientTelemetryReporter.ifPresent(reporter -> reporter.updateMetricsLabels(
                                 Collections.singletonMap(ClientTelemetryProvider.GROUP_MEMBER_ID, joinResponse.data().memberId())));
 
+                            // 判断当前Consumer Coordinator的角色
                             if (joinResponse.isLeader()) {
                                 onLeaderElected(joinResponse).chain(future);
                             } else {
@@ -764,6 +775,7 @@ public abstract class AbstractCoordinator implements Closeable {
     private RequestFuture<ByteBuffer> onLeaderElected(JoinGroupResponse joinResponse) {
         try {
             // perform the leader synchronization and send back the assignment for the group
+            // 分区分配结果
             Map<String, ByteBuffer> groupAssignment = onLeaderElected(
                 joinResponse.data().leader(),
                 joinResponse.data().protocolName(),
@@ -779,6 +791,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 );
             }
 
+            // 创建 SyncGroupRequest 请求，反馈分区分配结果给 GroupCoordinator 节点
             SyncGroupRequest.Builder requestBuilder =
                     new SyncGroupRequest.Builder(
                             new SyncGroupRequestData()
@@ -1436,6 +1449,9 @@ public abstract class AbstractCoordinator implements Closeable {
         }
     }
 
+    /**
+     * 向Group Coordinator发送心跳
+     */
     private class HeartbeatThread extends KafkaThread implements AutoCloseable {
         private boolean enabled = false;
         private boolean closed = false;
@@ -1511,6 +1527,7 @@ public abstract class AbstractCoordinator implements Closeable {
                             }
                             // backoff properly
                             AbstractCoordinator.this.wait(rebalanceConfig.retryBackoffMs);
+                            // session.timeout.ms 超时
                         } else if (heartbeat.sessionTimeoutExpired(now)) {
                             // the session timeout has expired without seeing a successful heartbeat, so we should
                             // probably make sure the coordinator is still healthy.
@@ -1519,6 +1536,7 @@ public abstract class AbstractCoordinator implements Closeable {
                         } else if (heartbeat.pollTimeoutExpired(now)) {
                             // the poll timeout has expired, which means that the foreground thread has stalled
                             // in between calls to poll().
+                            // 请求LeaveGroupRequest
                             handlePollTimeoutExpiry();
                         } else if (!heartbeat.shouldHeartbeat(now)) {
                             // poll again after waiting for the retry backoff in case the heartbeat failed or the
@@ -1526,6 +1544,7 @@ public abstract class AbstractCoordinator implements Closeable {
                             // exponential backoff.
                             AbstractCoordinator.this.wait(rebalanceConfig.retryBackoffMs);
                         } else {
+                            // 发送心跳
                             heartbeat.sentHeartbeat(now);
                             final RequestFuture<Void> heartbeatFuture = sendHeartbeatRequest();
                             heartbeatFuture.addListener(new RequestFutureListener<Void>() {
@@ -1583,6 +1602,11 @@ public abstract class AbstractCoordinator implements Closeable {
 
     }
 
+    /**
+     * Generation(谷歌翻译为“代”)可以通俗的理解为版本的概念，
+     * Generation未开始时值为-1，在第一次Rebalance后Group进入Stable状态时值为1，
+     * 此后每发生一次Rebalance，Generation的Id会自增长加1。
+     */
     protected static class Generation {
         public static final Generation NO_GENERATION = new Generation(
                 OffsetCommitRequest.DEFAULT_GENERATION_ID,

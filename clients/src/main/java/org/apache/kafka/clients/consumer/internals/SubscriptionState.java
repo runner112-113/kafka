@@ -76,7 +76,14 @@ public class SubscriptionState {
     private final Logger log;
 
     private enum SubscriptionType {
-        NONE, AUTO_TOPICS, AUTO_PATTERN, USER_ASSIGNED, AUTO_TOPICS_SHARE
+        NONE,
+        // 按照指定的 topic 的名字进行订阅，自动分配分区
+        AUTO_TOPICS,
+        // 按照正则匹配 topic 名称进行订阅，自动分配分区
+        AUTO_PATTERN,
+        // 用户手动指定消费的 topic 以及分区
+        USER_ASSIGNED,
+        AUTO_TOPICS_SHARE
     }
 
     /* the type of subscription */
@@ -162,6 +169,7 @@ public class SubscriptionState {
         if (this.subscriptionType == SubscriptionType.NONE)
             this.subscriptionType = type;
         else if (this.subscriptionType != type)
+            // 如果之前设置过，且目标模式不是之前的模式，则抛出异常
             throw new IllegalStateException(SUBSCRIPTION_EXCEPTION_MESSAGE);
     }
 

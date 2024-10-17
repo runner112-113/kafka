@@ -156,6 +156,7 @@ public final class ProducerBatch {
                                                                    Time.SYSTEM);
             // we have to keep every future returned to the users in case the batch needs to be
             // split to several new batches and resent.
+            // 响应回调
             thunks.add(new Thunk(callback, future));
             this.recordCount++;
             return future;
@@ -297,9 +298,11 @@ public final class ProducerBatch {
         Function<Integer, RuntimeException> recordExceptions
     ) {
         // Set the future before invoking the callbacks as we rely on its state for the `onCompletion` call
+        // 设置当前 RecordBatch 发送之后的状态
         produceFuture.set(baseOffset, logAppendTime, recordExceptions);
 
         // execute callbacks
+        // 循环执行每个消息的 Callback 回调
         for (int i = 0; i < thunks.size(); i++) {
             try {
                 Thunk thunk = thunks.get(i);

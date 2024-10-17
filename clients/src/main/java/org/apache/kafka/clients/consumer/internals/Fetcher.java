@@ -103,6 +103,7 @@ public class Fetcher<K, V> extends AbstractFetch {
      * @return number of fetches sent
      */
     public synchronized int sendFetches() {
+        // 获取可以 fetch 的 topic 分区，并创建到分区 leader 副本所在节点的 FetchRequest 请求
         final Map<Node, FetchSessionHandler.FetchRequestData> fetchRequests = prepareFetchRequests();
         sendFetchesInternal(
                 fetchRequests,

@@ -204,6 +204,7 @@ public abstract class AbstractFetch implements Closeable {
                     }
                 }
 
+                // 构建 CompletedFetch
                 CompletedFetch completedFetch = new CompletedFetch(
                         logContext,
                         subscriptions,
@@ -321,6 +322,8 @@ public abstract class AbstractFetch implements Closeable {
      * until the previously-fetched data has been processed.
      *
      * @return {@link Set} of {@link TopicPartition topic partitions} for which we should fetch data
+     *
+     * 当fetchBuffer还有数据时 不会再次去拉取
      */
     private Set<TopicPartition> fetchablePartitions() {
         // This is the set of partitions we have in our buffer

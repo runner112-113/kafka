@@ -122,22 +122,30 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
     private Logger log;
     private final String clientId;
     private final Optional<String> groupId;
+    // 控制消费者与 GroupCoordinator 之间交互
     private final ConsumerCoordinator coordinator;
     private final Deserializers<K, V> deserializers;
+    // 负责从服务端拉取消息
     private final Fetcher<K, V> fetcher;
     private final OffsetFetcher offsetFetcher;
     private final TopicMetadataFetcher topicMetadataFetcher;
+    // 拦截器集合， 在方法返回给用户之前进行拦截修改
     private final ConsumerInterceptors<K, V> interceptors;
     private final IsolationLevel isolationLevel;
 
     private final Time time;
     private final ConsumerNetworkClient client;
+    // 维护消费者的消费状态
     private final SubscriptionState subscriptions;
+    // 集群元数据
     private final ConsumerMetadata metadata;
+    // 重试间隔
     private final long retryBackoffMs;
     private final long retryBackoffMaxMs;
+    // 请求超时时长
     private final int requestTimeoutMs;
     private final int defaultApiTimeoutMs;
+    // 消费者是否关闭
     private volatile boolean closed = false;
     private final List<ConsumerPartitionAssignor> assignors;
     // Init value is needed to avoid NPE in case of exception raised in the constructor
@@ -232,6 +240,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                         CONSUMER_METRIC_GROUP_PREFIX,
                         this.time,
                         enableAutoCommit,
+                        // 自动提交的间隔
                         config.getInt(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG),
                         this.interceptors,
                         config.getBoolean(THROW_ON_FETCH_STABLE_OFFSET_UNSUPPORTED),
@@ -478,6 +487,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                 throw new IllegalArgumentException("Topic collection to subscribe to cannot be null");
             if (topics.isEmpty()) {
                 // treat subscribing to empty topic list as the same as unsubscribing
+                // 清除订阅
                 this.unsubscribe();
             } else {
                 for (String topic : topics) {
@@ -499,11 +509,12 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                 fetcher.clearBufferedDataForUnassignedPartitions(currentTopicPartitions);
 
                 log.info("Subscribed to topic(s): {}", String.join(", ", topics));
-                // 订阅
+                // 订阅当前 topic 列表
                 if (this.subscriptions.subscribe(new HashSet<>(topics), listener))
                     metadata.requestUpdateForNewTopics();
             }
         } finally {
+            // refcount--
             release();
         }
     }
@@ -567,8 +578,10 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
             fetcher.clearBufferedDataForUnassignedPartitions(Collections.emptySet());
             if (this.coordinator != null) {
                 this.coordinator.onLeavePrepare();
+                // 发送LeaveGroupRequest
                 this.coordinator.maybeLeaveGroup("the consumer unsubscribed from all topics");
             }
+            // 清空本地订阅的 topic 集合、清除本地记录的每个 topic 分区的消费状态，以及重置一些本地的变量
             this.subscriptions.unsubscribe();
             log.info("Unsubscribed all topics or patterns and assigned partitions");
         } finally {
@@ -625,6 +638,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
         try {
             this.kafkaConsumerMetrics.recordPollStart(timer.currentTimeMs());
 
+            // 当前消费者未订阅任何 topic
             if (this.subscriptions.hasNoSubscriptionOrUserAssignment()) {
                 throw new IllegalStateException("Consumer is not subscribed to any topics or assigned any partitions");
             }
@@ -634,7 +648,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
 
                 if (includeMetadataInTimeout) {
                     // try to update assignment metadata BUT do not need to block on the timer for join group
-                    // 自动提交offset
+                    // ConsumerCoordinator处理（自动提交offset 等）
                     updateAssignmentMetadataIfNeeded(timer, false);
                 } else {
                     while (!updateAssignmentMetadataIfNeeded(time.timer(Long.MAX_VALUE), true)) {
@@ -651,8 +665,9 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                     // NOTE: since the consumed position has already been updated, we must not allow
                     // wakeups or any other errors to be triggered prior to returning the fetched records.
                     // 返回之前，再次触发poll 去服务端请求，方便下次使用CompleteFetch 缓存
-                    // 1. sendFetches() > 0
-                    // 2. unset 或 in-flight中有请求
+                    // 从而让处理消息的过程与拉取消息的过程并行，以减少等待网络 IO 的时间
+                    // 1. sendFetches() > 0：本地的fetchBuffer已经空了
+                    // 2. unset 或 in-flight中有请求：有待发送的请求
                     if (sendFetches() > 0 || client.hasPendingRequests()) {
                         client.transmitSends();
                     }
@@ -680,6 +695,10 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
     }
 
     boolean updateAssignmentMetadataIfNeeded(final Timer timer, final boolean waitForJoinGroup) {
+        // ConsumerCoordinator处理逻辑
+        // poll 解决两件事:
+        // 1.确保消费者加入消费者组
+        // 2.周期性自动提交offset或异步提交成功回调OffsetCommitCallback.onComplete方法
         if (coordinator != null && !coordinator.poll(timer, waitForJoinGroup)) {
             return false;
         }
