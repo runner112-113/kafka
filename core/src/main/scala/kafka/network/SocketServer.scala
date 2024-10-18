@@ -1188,7 +1188,8 @@ private[kafka] class Processor(
                 }
                 // 放置requestQueue中
                 requestChannel.sendRequest(req)
-                // 继续注册OP_READ操作
+                // 取消注册的 OP_READ 事件，处理期间不再接收新的请求（即不读取新的请求数据）
+                // 这样才能保证多KafkaRequestHandler处理时不出问题（e.g.写入顺序问题）
                 selector.mute(connectionId)
                 handleChannelMuteEvent(connectionId, ChannelMuteEvent.REQUEST_RECEIVED)
               }
