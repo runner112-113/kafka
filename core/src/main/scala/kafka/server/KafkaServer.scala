@@ -122,6 +122,7 @@ class KafkaServer(
   private val isStartingUp = new AtomicBoolean(false)
 
   @volatile private var _brokerState: BrokerState = BrokerState.NOT_RUNNING
+  // 阻塞主线程等待 KafkaServer 的关闭
   private var shutdownLatch = new CountDownLatch(1)
   private var logContext: LogContext = _
 
@@ -976,6 +977,7 @@ class KafkaServer(
     try {
       info("shutting down")
 
+      // 如果正在启动，则不允许关闭
       if (isStartingUp.get)
         throw new IllegalStateException("Kafka server is still starting up, cannot shut down!")
 
@@ -984,7 +986,10 @@ class KafkaServer(
       // `true` at the end of this method.
       if (shutdownLatch.getCount > 0 && isShuttingDown.compareAndSet(false, true)) {
         CoreUtils.swallow(controlledShutdown(), this)
+        // 设置 broker 状态为 BrokerShuttingDown，表示当前 broker 正在执行关闭操作
         _brokerState = BrokerState.SHUTTING_DOWN
+
+        /* 依次关闭相应注册的组件 */
 
         if (dynamicConfigManager != null)
           CoreUtils.swallow(dynamicConfigManager.shutdown(), this)
@@ -1076,10 +1081,13 @@ class KafkaServer(
         if (lifecycleManager != null) {
           lifecycleManager.close()
         }
+
+        // 设置 broker 状态为 NotRunning，表示关闭成功
         _brokerState = BrokerState.NOT_RUNNING
 
         quorumControllerNodeProvider = null
 
+        // 设置状态标记
         startupComplete.set(false)
         isShuttingDown.set(false)
         CoreUtils.swallow(AppInfoParser.unregisterAppInfo(Server.MetricsPrefix, config.brokerId.toString, metrics), this)

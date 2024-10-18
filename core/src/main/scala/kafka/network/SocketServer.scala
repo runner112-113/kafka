@@ -84,6 +84,7 @@ class SocketServer(val config: KafkaConfig,
 
   private val metricsGroup = new KafkaMetricsGroup(this.getClass)
 
+  // requestQueue的最大长度。默认500
   private val maxQueuedRequests = config.queuedMaxRequests
 
   protected val nodeId: Int = config.brokerId
@@ -97,8 +98,9 @@ class SocketServer(val config: KafkaConfig,
   private val memoryPoolDepletedTimeMetricName = metrics.metricName("MemoryPoolDepletedTimeTotal", MetricsGroup)
   memoryPoolSensor.add(new Meter(TimeUnit.MILLISECONDS, memoryPoolDepletedPercentMetricName, memoryPoolDepletedTimeMetricName))
   private val memoryPool = if (config.queuedMaxBytes > 0) new SimpleMemoryPool(config.queuedMaxBytes, config.socketRequestMaxBytes, false, memoryPoolSensor) else MemoryPool.NONE
-  // data-plane
+  // data-plane Acceptor 对象集合，每个 EndPoint 对应一个 Acceptor
   private[network] val dataPlaneAcceptors = new ConcurrentHashMap[EndPoint, DataPlaneAcceptor]()
+  // processors和handlers数据交互
   val dataPlaneRequestChannel = new RequestChannel(maxQueuedRequests, DataPlaneAcceptor.MetricPrefix, time, apiVersionManager.newRequestMetrics)
   // control-plane
   private[network] var controlPlaneAcceptorOpt: Option[ControlPlaneAcceptor] = None
@@ -106,6 +108,7 @@ class SocketServer(val config: KafkaConfig,
     new RequestChannel(20, ControlPlaneAcceptor.MetricPrefix, time, apiVersionManager.newRequestMetrics))
 
   private[this] val nextProcessorId: AtomicInteger = new AtomicInteger(0)
+  // 用于控制每个 IP 上的最大连接数
   val connectionQuotas = new ConnectionQuotas(config, time, metrics)
 
   /**
@@ -228,6 +231,7 @@ class SocketServer(val config: KafkaConfig,
 
     info("Enabling request processing.")
     controlPlaneAcceptorOpt.foreach(chainAcceptorFuture)
+    // 执行所有的Acceptor的start
     dataPlaneAcceptors.values().forEach(chainAcceptorFuture)
     FutureUtils.chainFuture(CompletableFuture.allOf(authorizerFutures.values.toArray: _*),
         allAuthorizerFuturesComplete)
@@ -566,7 +570,7 @@ class ControlPlaneAcceptor(socketServer: SocketServer,
  * Thread that accepts and configures new connections. There is one of these per endpoint.
  */
 private[kafka] abstract class Acceptor(val socketServer: SocketServer,
-                                       val endPoint: EndPoint,
+                                       val endPoint: EndPoint, // 对应的网卡信息
                                        var config: KafkaConfig,
                                        nodeId: Int,
                                        val connectionQuotas: ConnectionQuotas,
@@ -633,8 +637,10 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
         debug(s"Opened endpoint ${endPoint.host}:${endPoint.port}")
       }
       debug(s"Starting processors for listener ${endPoint.listenerName}")
+      // 开启Processor处理线程
       processors.foreach(_.start())
       debug(s"Starting acceptor thread for listener ${endPoint.listenerName}")
+      // 开启Acceptor线程
       thread.start()
       startedFuture.complete(null)
       started.set(true)
@@ -684,6 +690,7 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
 
   /**
    * Accept loop that checks for new connection attempts
+   * Acceptor线程
    */
   override def run(): Unit = {
     serverChannel.register(nioSelector, SelectionKey.OP_ACCEPT)
@@ -753,6 +760,7 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
           iter.remove()
 
           if (key.isAcceptable) {
+            // 如果是 OP_ACCEPT 事件，则调用 accept 方法进行处理
             accept(key).foreach { socketChannel =>
               // Assign the channel to the next processor (using round-robin) to which the
               // channel can be added without blocking. If newConnections queue is full on
@@ -764,10 +772,12 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
                 processor = synchronized {
                   // adjust the index (if necessary) and retrieve the processor atomically for
                   // correct behaviour in case the number of processors is reduced dynamically
+                  // 基于轮询算法选择下一个 Processor 处理下一次请求，负载均衡
                   currentProcessorIndex = currentProcessorIndex % processors.length
                   processors(currentProcessorIndex)
                 }
                 currentProcessorIndex += 1
+                // 将 SocketChannel 交给 Processor 进行处理
               } while (!assignNewConnection(socketChannel, processor, retriesLeft == 0))
             }
           } else
@@ -786,6 +796,7 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
     val serverSocketChannel = key.channel().asInstanceOf[ServerSocketChannel]
     val socketChannel = serverSocketChannel.accept()
     try {
+      // 增加对应 IP 上的连接数，如果连接数超过阈值，则抛 TooManyConnectionsException 异常
       connectionQuotas.inc(endPoint.listenerName, socketChannel.socket.getInetAddress, blockedPercentMeter)
       configureAcceptedSocketChannel(socketChannel)
       Some(socketChannel)
@@ -808,6 +819,7 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
   }
 
   protected def configureAcceptedSocketChannel(socketChannel: SocketChannel): Unit = {
+    // 配置 SocketChannel 对象，非阻塞模式
     socketChannel.configureBlocking(false)
     socketChannel.socket().setTcpNoDelay(true)
     socketChannel.socket().setKeepAlive(true)
@@ -828,6 +840,7 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
   }
 
   private def assignNewConnection(socketChannel: SocketChannel, processor: Processor, mayBlock: Boolean): Boolean = {
+    // 将 SocketChannel 交给 Processor 进行处理
     if (processor.accept(socketChannel, mayBlock, blockedPercentMeter)) {
       debug(s"Accepted connection from ${socketChannel.socket.getRemoteSocketAddress} on" +
         s" ${socketChannel.socket.getLocalSocketAddress} and assigned it to processor ${processor.id}," +
@@ -943,7 +956,9 @@ private[kafka] class Processor(
   }
 
   private val newConnections = new ArrayBlockingQueue[SocketChannel](connectionQueueSize)
+  // 缓存未发送给客户端的响应，由于客户端不会进行确认，所以服务端在发送成功之后会将其移除
   private val inflightResponses = mutable.Map[String, RequestChannel.Response]()
+  // 响应队列，每个 Processor 对应一个响应队列
   private val responseQueue = new LinkedBlockingDeque[RequestChannel.Response]()
 
   private[kafka] val metricTags = mutable.LinkedHashMap(
@@ -1009,12 +1024,22 @@ private[kafka] class Processor(
       while (shouldRun.get()) {
         try {
           // setup any new connections that have been queued up
+          // 遍历获取分配给当前 Processor 的 SocketChannel 对象，注册 OP_READ 事件
           configureNewConnections()
           // register any new responses for writing
+          // 遍历处理当前 Processor 的响应队列，依据响应类型进行处理
           processNewResponses()
+          // 发送缓存的响应对象给客户端
           poll()
+          // 遍历处理 poll 操作放置在 Selector 的 completedReceives 队列中的请求，
+          // 封装请求信息为 Request 对象，并记录到请求队列中等待 Handler 线程处理，
+          // 同时标记当前 Selector 暂时不再接收新的请求
           processCompletedReceives()
+          // 遍历处理 poll 操作放置在 Selector 的 completedSends 队列中的请求，
+          // 将其从 inflightResponses 集合中移除，并标记当前 Selector 可以继续读取数据
           processCompletedSends()
+          // 遍历处理 poll 操作放置在 Selector 的 disconnected 集合中的断开的连接，
+          // 将连接对应的所有响应从 inflightResponses 中移除，同时更新对应 IP 的连接数
           processDisconnected()
           closeExcessConnections()
         } catch {
@@ -1161,7 +1186,9 @@ private[kafka] class Processor(
                       apiVersionsRequest.data.clientSoftwareVersion))
                   }
                 }
+                // 放置requestQueue中
                 requestChannel.sendRequest(req)
+                // 继续注册OP_READ操作
                 selector.mute(connectionId)
                 handleChannelMuteEvent(connectionId, ChannelMuteEvent.REQUEST_RECEIVED)
               }
@@ -1196,6 +1223,7 @@ private[kafka] class Processor(
         // it will be unmuted immediately. If the channel has been throttled, it will unmuted only if the throttling
         // delay has already passed by now.
         handleChannelMuteEvent(send.destinationId, ChannelMuteEvent.RESPONSE_SENT)
+        // 注册 OP_READ 事件，继续读取请求数据
         tryUnmuteChannel(send.destinationId)
       } catch {
         case e: Throwable => processChannelException(send.destinationId,

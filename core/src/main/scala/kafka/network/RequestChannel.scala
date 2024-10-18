@@ -333,7 +333,9 @@ class RequestChannel(val queueSize: Int,
 
   private val metricsGroup = new KafkaMetricsGroup(this.getClass)
 
+  // 请求队列，所有的 Processor 共用一个
   private val requestQueue = new ArrayBlockingQueue[BaseRequest](queueSize)
+  // 一个Acceptor对应的多个processor
   private val processors = new ConcurrentHashMap[Int, Processor]()
   private val requestQueueSizeMetricName = metricNamePrefix.concat(RequestQueueSizeMetric)
   private val responseQueueSizeMetricName = metricNamePrefix.concat(ResponseQueueSizeMetric)

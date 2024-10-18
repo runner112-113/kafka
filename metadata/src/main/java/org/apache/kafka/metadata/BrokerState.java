@@ -46,34 +46,44 @@ import java.util.Map;
 public enum BrokerState {
     /**
      * The state the broker is in when it first starts up.
+     * 初始状态，标识当前 broker 节点未运行
      */
     NOT_RUNNING((byte) 0),
 
     /**
      * The state the broker is in when it is catching up with cluster metadata.
+     * 标识当前 broker 节点正在启动中
      */
     STARTING((byte) 1),
 
     /**
      * The broker has caught up with cluster metadata, but has not yet
      * been unfenced by the controller.
+     *
+     * 标识当前 broker 节点正在从上次非正常关闭中恢复。
      */
     RECOVERY((byte) 2),
 
     /**
      * The state the broker is in when it has registered at least once, and is
      * accepting client requests.
+     *
+     * 标识当前 broker 节点启动成功，可以对外提供服务
      */
     RUNNING((byte) 3),
 
     /**
      * The state the broker is in when it is attempting to perform a controlled
      * shutdown.
+     *
+     * 标识当前 broker 节点正在等待 controlled shutdown 操作完成
      */
     PENDING_CONTROLLED_SHUTDOWN((byte) 6),
 
     /**
      * The state the broker is in when it is shutting down.
+     *
+     * 标识当前 broker 节点正在执行 shutdown 操作
      */
     SHUTTING_DOWN((byte) 7),
 
