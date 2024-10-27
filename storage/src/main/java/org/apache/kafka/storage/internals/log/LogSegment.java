@@ -76,11 +76,16 @@ public class LogSegment implements Closeable {
         LOG_FLUSH_TIMER = logFlushStatsMetricsGroup.newTimer("LogFlushRateAndTimeMs", TimeUnit.MILLISECONDS, TimeUnit.SECONDS);
     }
 
+    // log文件对象
     private final FileRecords log;
+    // index 文件对象
     private final LazyIndex<OffsetIndex> lazyOffsetIndex;
+    // timeindex 文件对象
     private final LazyIndex<TimeIndex> lazyTimeIndex;
     private final TransactionIndex txnIndex;
+    // 当前日志分片文件中第一条消息的 offset 值
     private final long baseOffset;
+    // 索引项之间间隔的最小字节数，对应 index.interval.bytes 配置
     private final int indexIntervalBytes;
     private final long rollJitterMs;
     private final Time time;
@@ -91,11 +96,14 @@ public class LogSegment implements Closeable {
 
     // The maximum timestamp and offset we see so far
     // NOTED: the offset is the last offset of batch having the max timestamp.
+    // 已追加消息的最大时间戳
     private volatile TimestampOffset maxTimestampAndOffsetSoFar = TimestampOffset.UNKNOWN;
 
+    // 当前 LogSegment 的创建时间
     private long created;
 
     /* the number of bytes since we last added an entry in the offset index */
+    // 自上次添加索引项后，在 log 文件中累计加入的消息字节数
     private int bytesSinceLastIndexEntry = 0;
 
     /**
@@ -237,13 +245,14 @@ public class LogSegment implements Closeable {
      * @param records The log entries to append.
      * @throws LogSegmentOffsetOverflowException if the largest offset causes index offset overflow
      */
-    public void append(long largestOffset,
-                       long largestTimestampMs,
-                       long shallowOffsetOfMaxTimestamp,
+    public void append(long largestOffset, // 待追加消息中的最大 offset
+                       long largestTimestampMs,// 待追加消息中的最大时间戳
+                       long shallowOffsetOfMaxTimestamp, // 最大时间戳消息对应的 offset
                        MemoryRecords records) throws IOException {
         if (records.sizeInBytes() > 0) {
             LOGGER.trace("Inserting {} bytes at end offset {} at position {} with largest timestamp {} at offset {}",
                 records.sizeInBytes(), largestOffset, log.sizeInBytes(), largestTimestampMs, shallowOffsetOfMaxTimestamp);
+            // 获取物理位置（当前分片的大小）
             int physicalPosition = log.sizeInBytes();
             if (physicalPosition == 0)
                 rollingBasedTimestamp = OptionalLong.of(largestTimestampMs);
@@ -251,18 +260,24 @@ public class LogSegment implements Closeable {
             ensureOffsetInRange(largestOffset);
 
             // append the messages
+            // 将消息数据追加到 log 文件
             long appendedBytes = log.append(records);
             LOGGER.trace("Appended {} to {} at end offset {}", appendedBytes, log.file(), largestOffset);
             // Update the in memory max timestamp and corresponding offset.
+            // 更新已追加的消息对应的最大时间戳，及其 offset
             if (largestTimestampMs > maxTimestampSoFar()) {
                 maxTimestampAndOffsetSoFar = new TimestampOffset(largestTimestampMs, shallowOffsetOfMaxTimestamp);
             }
             // append an entry to the index (if needed)
+            // 如果当前累计追加的日志字节数超过阈值（对应 index.interval.bytes 配置）
             if (bytesSinceLastIndexEntry > indexIntervalBytes) {
+                // 更新 index 和 timeindex 文件
                 offsetIndex().append(largestOffset, physicalPosition);
                 timeIndex().maybeAppend(maxTimestampSoFar(), shallowOffsetOfMaxTimestampSoFar());
+                // 重置当前累计追加的日志字节数
                 bytesSinceLastIndexEntry = 0;
             }
+            // 更新累计加入的日志字节数
             bytesSinceLastIndexEntry += records.sizeInBytes();
         }
     }
@@ -386,7 +401,9 @@ public class LogSegment implements Closeable {
      *        message or null if no message meets this criteria.
      */
     LogOffsetPosition translateOffset(long offset, int startingFilePosition) throws IOException {
+        // 基于二分查找获取小于等于参数 offset 的最大 offset，返回 offset 与对应的物理地址
         OffsetPosition mapping = offsetIndex().lookup(offset);
+        // 查找对应的物理地址 position
         return log.searchForOffsetWithSize(offset, Math.max(mapping.position, startingFilePosition));
     }
 
@@ -422,19 +439,26 @@ public class LogSegment implements Closeable {
      * @return The fetched data and the offset metadata of the first message whose offset is >= startOffset,
      *         or null if the startOffset is larger than the largest offset in this log
      */
-    public FetchDataInfo read(long startOffset, int maxSize, Optional<Long> maxPositionOpt, boolean minOneMessage) throws IOException {
+    public FetchDataInfo read(long startOffset, // 读取消息的起始 offset
+                              int maxSize, // 读取消息的最大字节数
+                              Optional<Long> maxPositionOpt, boolean minOneMessage) throws IOException {
         if (maxSize < 0)
             throw new IllegalArgumentException("Invalid max size " + maxSize + " for log read from segment " + log);
 
+        // 获取小于等于 startOffset 的最大 offset 对应的物理地址 position
+        // 该方法基于 二分查找算法 从 index 文件中获取小于等于 startOffset 的最大 offset 对应的物理地址。
         LogOffsetPosition startOffsetAndSize = translateOffset(startOffset);
 
         // if the start position is already off the end of the log, return null
+        // 如果读取的位置超出了当前文件，直接返回 null
         if (startOffsetAndSize == null)
             return null;
 
+        // 起始 position
         int startPosition = startOffsetAndSize.position;
         LogOffsetMetadata offsetMetadata = new LogOffsetMetadata(startOffset, this.baseOffset, startPosition);
 
+        // 更新读取消息的最大字节数
         int adjustedMaxSize = maxSize;
         if (minOneMessage)
             adjustedMaxSize = Math.max(maxSize, startOffsetAndSize.size);
@@ -442,12 +466,15 @@ public class LogSegment implements Closeable {
         // return empty records in the fetch-data-info when:
         // 1. adjustedMaxSize is 0 (or)
         // 2. maxPosition to read is unavailable
+        // 如果请求读取的消息最大字节数为 0，则返回一个空的结果对象
         if (adjustedMaxSize == 0 || !maxPositionOpt.isPresent())
             return new FetchDataInfo(offsetMetadata, MemoryRecords.EMPTY);
 
         // calculate the length of the message set to read based on whether or not they gave us a maxOffset
+        // 计算待读取的字节数
         int fetchSize = Math.min((int) (maxPositionOpt.get() - startPosition), adjustedMaxSize);
 
+        // 读取对应的消息数据，并封装成 FetchDataInfo 对象返回
         return new FetchDataInfo(offsetMetadata, log.slice(startPosition, fetchSize),
             adjustedMaxSize < startOffsetAndSize.size, Optional.empty());
     }

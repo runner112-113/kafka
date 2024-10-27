@@ -50,6 +50,11 @@ import java.nio.MappedByteBuffer;
  *
  * No attempt is made to checksum the contents of this file, in the event of a crash it is rebuilt.
  *
+ *
+ * TimeIndex 类同样用于描述和管理索引文件数据，提供了基于时间戳检索日志数据的功能，对应 timeindex 文件。
+ * 区别于 OffsetIndex 的地方在于 TimeIndex 的索引项由 12 个字节构成，其中前面 8 个字节表示当前 offset 之前已追加消息的最大时间戳（毫秒），
+ * 后面 4 个字节表示相对 offset，等价于 OffsetIndex 索引项的前 4 个字节
+ *
  */
 public class TimeIndex extends AbstractIndex {
     private static final Logger log = LoggerFactory.getLogger(TimeIndex.class);

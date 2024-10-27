@@ -50,6 +50,15 @@ import java.util.Optional;
  *
  * All external APIs translate from relative offsets to full offsets, so users of this class do not interact with the internal
  * storage format.
+ *
+ *
+ * OffsetIndex 类用于描述和管理索引文件数据，定义了对 index 文件的检索、追加，以及截断等功能。
+ * 一个 OffsetIndex 对象对应一个 index 文件，用于提高消息检索的性能。
+ *
+ *
+ * OffsetIndex 的索引项由 8 个字节构成，其中前面 4 个字节表示消息的相对 offset，后面 4 个字节表示消息所在文件的物理地址（position），其中相对 offset 参考的偏移量是对应文件的起始 offset，
+ * 这样的设计将原本 long 类型（8 字节）的消息 offset 转换成 int 类型（4 字节）的相对 offset 进行存储，能够减少空间占用。
+ * 此外，Kafka 在构造 index 文件（包括下面要介绍的 timeindex 文件）时并不会针对每个 offset 都建立对应的索引项，而是采用隔一段区间打一个点的稀疏索引机制，以进一步减少对磁盘空间的消耗。
  */
 public class OffsetIndex extends AbstractIndex {
     private static final Logger log = LoggerFactory.getLogger(OffsetIndex.class);
@@ -149,7 +158,10 @@ public class OffsetIndex extends AbstractIndex {
 
             if (entries() == 0 || offset > lastOffset) {
                 log.trace("Adding index entry {} => {} to {}", offset, position, file().getAbsolutePath());
+                // put offset
+                // 将原本 long 类型（8 字节）的消息 offset 转换成 int 类型（4 字节）的相对 offset 进行存储,减少空间占用
                 mmap().putInt(relativeOffset(offset));
+                // put position
                 mmap().putInt(position);
                 incrementEntries();
                 lastOffset = offset;

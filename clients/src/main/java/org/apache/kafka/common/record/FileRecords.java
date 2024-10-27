@@ -38,17 +38,25 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * A {@link Records} implementation backed by a file. An optional start and end position can be applied to this
  * instance to enable slicing a range of the log records.
+ *
+ * FileRecords 类用于描述和管理日志（分片）文件数据，对应一个 log 文件
  */
 public class FileRecords extends AbstractRecords implements Closeable {
+    // 标识是否为日志文件分片
     private final boolean isSlice;
+    // 分片的起始位置
     private final int start;
+    // 分片的结束位置
     private final int end;
 
     private final Iterable<FileLogInputStream.FileChannelRecordBatch> batches;
 
     // mutable state
+    // 如果是分片则表示分片的大小（end - start），如果不是分片则表示整个日志文件的大小
     private final AtomicInteger size;
+    // 读写对应的日志文件的通道
     private final FileChannel channel;
+    // 日志文件对象
     private volatile File file;
 
     /**
