@@ -38,8 +38,11 @@ public class GroupRebalanceConfig {
         }
     }
 
+    // 会话超时时间
     public final int sessionTimeoutMs;
+    // 重平衡超时时间，默认为max.poll.interval.ms
     public final int rebalanceTimeoutMs;
+    // 心跳发送间隔
     public final int heartbeatIntervalMs;
     public final String groupId;
     public final Optional<String> groupInstanceId;

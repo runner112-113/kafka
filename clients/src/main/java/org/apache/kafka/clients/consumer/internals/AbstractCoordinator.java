@@ -323,6 +323,7 @@ public abstract class AbstractCoordinator implements Closeable {
     protected synchronized RequestFuture<Void> lookupCoordinator() {
         if (findCoordinatorFuture == null) {
             // find a node to ask about the coordinator
+            // 寻找最小负载的node去ask who is my coordinator
             Node node = this.client.leastLoadedNode();
             if (node == null) {
                 log.debug("No broker available to send FindCoordinator request");
@@ -411,6 +412,7 @@ public abstract class AbstractCoordinator implements Closeable {
             return false;
         }
 
+        // 开启心跳线程
         startHeartbeatThreadIfNeeded();
         return joinGroupIfNeeded(timer);
     }
@@ -948,6 +950,7 @@ public abstract class AbstractCoordinator implements Closeable {
                             coordinatorData.host(),
                             coordinatorData.port());
                     log.info("Discovered group coordinator {}", coordinator);
+                    // 尝试连接coordinator
                     client.tryConnect(coordinator);
                     heartbeat.resetSessionTimeout();
                 }
@@ -1239,6 +1242,7 @@ public abstract class AbstractCoordinator implements Closeable {
                         .setGroupInstanceId(this.rebalanceConfig.groupInstanceId.orElse(null))
                         .setGenerationId(this.generation.generationId));
         return client.send(coordinator, requestBuilder)
+                // 心跳请求响应处理
                 .compose(new HeartbeatResponseHandler(generation));
     }
 
@@ -1266,6 +1270,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 // this case and ignore the REBALANCE_IN_PROGRESS error
                 synchronized (AbstractCoordinator.this) {
                     if (state == MemberState.STABLE) {
+                        // 重新加入Group
                         requestRejoin("group is already rebalancing");
                         future.raise(error);
                     } else {
@@ -1453,8 +1458,11 @@ public abstract class AbstractCoordinator implements Closeable {
      * 向Group Coordinator发送心跳
      */
     private class HeartbeatThread extends KafkaThread implements AutoCloseable {
+        // 是否允许心跳标志位，写入要加锁
         private boolean enabled = false;
+        // 是否关闭标志位，写入要加锁
         private boolean closed = false;
+        // 心跳失败的原因，初始化为null，使用原子整型
         private final AtomicReference<RuntimeException> failed = new AtomicReference<>(null);
 
         private HeartbeatThread() {
@@ -1531,12 +1539,15 @@ public abstract class AbstractCoordinator implements Closeable {
                         } else if (heartbeat.sessionTimeoutExpired(now)) {
                             // the session timeout has expired without seeing a successful heartbeat, so we should
                             // probably make sure the coordinator is still healthy.
+                            // 置为协调者未知，等待下一轮
                             markCoordinatorUnknown("session timed out without receiving a "
                                     + "heartbeat response");
+                            // poll超时 超过 max.poll.interval.ms
                         } else if (heartbeat.pollTimeoutExpired(now)) {
                             // the poll timeout has expired, which means that the foreground thread has stalled
                             // in between calls to poll().
                             // 请求LeaveGroupRequest
+                            // 发送离开请求，这个会导致reblance
                             handlePollTimeoutExpiry();
                         } else if (!heartbeat.shouldHeartbeat(now)) {
                             // poll again after waiting for the retry backoff in case the heartbeat failed or the
@@ -1558,6 +1569,7 @@ public abstract class AbstractCoordinator implements Closeable {
                                 @Override
                                 public void onFailure(RuntimeException e) {
                                     synchronized (AbstractCoordinator.this) {
+                                        // 正在reblance当做正常响应
                                         if (e instanceof RebalanceInProgressException) {
                                             // it is valid to continue heartbeating while the group is rebalancing. This
                                             // ensures that the coordinator keeps the member in the group for as long

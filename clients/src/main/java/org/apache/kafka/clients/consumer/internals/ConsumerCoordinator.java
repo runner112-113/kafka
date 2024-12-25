@@ -482,6 +482,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             }
             // Always update the heartbeat last poll time so that the heartbeat thread does not leave the
             // group proactively due to application inactivity even if (say) the coordinator cannot be found.
+            // 发送心跳
             pollHeartbeat(timer.currentTimeMs());
             // 找到对应的Group Coordinator
             if (coordinatorUnknownAndUnreadySync(timer)) {
@@ -512,7 +513,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 }
 
                 // if not wait for join group, we would just use a timer of 0
-                // 加入消费者组
+                // 通过JoinGroup和SyncGroup进行rebalance，来保证达到STABLE状态
                 if (!ensureActiveGroup(waitForJoinGroup ? timer : time.timer(0L))) {
                     // since we may use a different timer in the callee, we'd still need
                     // to update the original timer's current time after the call
@@ -522,6 +523,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 }
             }
         } else {
+            // 手动指定了TP，即Standalone mode
             // For manually assigned partitions, we do not try to pro-actively lookup coordinator;
             // instead we only try to refresh metadata when necessary.
             // If connections to all nodes fail, wakeups triggered while attempting to send fetch

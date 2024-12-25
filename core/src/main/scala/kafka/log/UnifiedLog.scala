@@ -789,10 +789,12 @@ class UnifiedLog(@volatile var logStartOffset: Long,
             val offset = PrimitiveRef.ofLong(localLog.logEndOffset)
             appendInfo.setFirstOffset(offset.value)
             val validateAndOffsetAssignResult = try {
+              // 服务端压缩算法
               val targetCompression = BrokerCompressionType.targetCompression(config.compression, appendInfo.sourceCompression())
               val validator = new LogValidator(validRecords,
                 topicPartition,
                 time,
+                // 生产端压缩算法
                 appendInfo.sourceCompression,
                 targetCompression,
                 config.compact,

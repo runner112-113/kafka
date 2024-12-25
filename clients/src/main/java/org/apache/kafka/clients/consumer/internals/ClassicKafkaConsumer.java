@@ -144,6 +144,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
     private final long retryBackoffMaxMs;
     // 请求超时时长
     private final int requestTimeoutMs;
+    // 客户端api操作的默认超时时长，default：1min
     private final int defaultApiTimeoutMs;
     // 消费者是否关闭
     private volatile boolean closed = false;
@@ -619,12 +620,19 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
         }
     }
 
+    /**
+     * 超时时间不包含元数据获取的时间
+     * 如果远端的broker不可用了， 那就获取不到元数据，那么consumer程序会被无限阻塞下去
+     */
     @Deprecated
     @Override
     public ConsumerRecords<K, V> poll(final long timeoutMs) {
         return poll(time.timer(timeoutMs), false);
     }
 
+    /**
+     * 超时时间包含元数据的获取时间
+     */
     @Override
     public ConsumerRecords<K, V> poll(final Duration timeout) {
         return poll(time.timer(timeout), true);
@@ -647,10 +655,12 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                 client.maybeTriggerWakeup();
 
                 if (includeMetadataInTimeout) {
+                    // 超时时间中包含元数据的获取时间
                     // try to update assignment metadata BUT do not need to block on the timer for join group
-                    // ConsumerCoordinator处理（自动提交offset 等）
                     updateAssignmentMetadataIfNeeded(timer, false);
                 } else {
+                    // 不包含获取元数据的时间所以time.timer(Long.MAX_VALUE)
+                    // ConsumerCoordinator处理（自动提交offset 等）
                     while (!updateAssignmentMetadataIfNeeded(time.timer(Long.MAX_VALUE), true)) {
                         log.warn("Still waiting for metadata");
                     }
