@@ -840,6 +840,7 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
    */
   def wakeup(): Unit = nioSelector.wakeup()
 
+  // 根据num.network.threads创建网络线程处理器
   def addProcessors(toCreate: Int): Unit = synchronized {
     val listenerName = endPoint.listenerName
     val securityProtocol = endPoint.securityProtocol
@@ -1008,6 +1009,7 @@ private[kafka] class Processor(
           configureNewConnections()
           // register any new responses for writing
           processNewResponses()
+          // select#poll
           poll()
           processCompletedReceives()
           processCompletedSends()
