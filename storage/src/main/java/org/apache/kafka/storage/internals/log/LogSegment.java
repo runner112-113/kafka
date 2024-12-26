@@ -80,13 +80,20 @@ public class LogSegment implements Closeable {
     private final FileRecords log;
     // index 文件对象
     private final LazyIndex<OffsetIndex> lazyOffsetIndex;
-    // timeindex 文件对象
+    // timeindex 索引文件
     private final LazyIndex<TimeIndex> lazyTimeIndex;
+    // 已中止事务索引文件
     private final TransactionIndex txnIndex;
     // 当前日志分片文件中第一条消息的 offset 值
+    // 磁盘上看到的文件名就是 baseOffset 的值。每个 LogSegment 对象实例一旦被创建，它的起始位移就是固定的了，不能再被更改
     private final long baseOffset;
     // 索引项之间间隔的最小字节数，对应 index.interval.bytes 配置
+    // roker 端参数 log.index.interval.bytes 值，它控制了日志段对象新增索引项的频率
+    // 默认情况下，日志段至少新写入 4KB 的消息数据才会新增一条索引项
     private final int indexIntervalBytes;
+    // 日志段对象新增倒计时的“扰动值”。
+    // 因为目前 Broker 端日志段新增倒计时是全局设置，这就是说，在未来的某个时刻可能同时创建多个日志段对象，这将极大地增加物理磁盘 I/O 压力。
+    // 有了 rollJitterMs 值的干扰，每个新增日志段在创建时会彼此岔开一小段时间，这样可以缓解物理磁盘的 I/O 负载瓶颈。
     private final long rollJitterMs;
     private final Time time;
 
@@ -248,19 +255,23 @@ public class LogSegment implements Closeable {
     public void append(long largestOffset, // 待追加消息中的最大 offset
                        long largestTimestampMs,// 待追加消息中的最大时间戳
                        long shallowOffsetOfMaxTimestamp, // 最大时间戳消息对应的 offset
+                       // 真正要写入的消息集合
                        MemoryRecords records) throws IOException {
         if (records.sizeInBytes() > 0) {
             LOGGER.trace("Inserting {} bytes at end offset {} at position {} with largest timestamp {} at offset {}",
                 records.sizeInBytes(), largestOffset, log.sizeInBytes(), largestTimestampMs, shallowOffsetOfMaxTimestamp);
             // 获取物理位置（当前分片的大小）
             int physicalPosition = log.sizeInBytes();
+            // 如果physicalPosition是空的话， Kafka 需要记录要写入消息集合的最大时间戳，并将其作为后面新增日志段倒计时的依据
             if (physicalPosition == 0)
                 rollingBasedTimestamp = OptionalLong.of(largestTimestampMs);
 
+            // 确保输入参数最大位移值是合法的, 有已知bug
             ensureOffsetInRange(largestOffset);
 
             // append the messages
             // 将消息数据追加到 log 文件
+            // 将内存中的消息对象写入到操作系统的页缓存
             long appendedBytes = log.append(records);
             LOGGER.trace("Appended {} to {} at end offset {}", appendedBytes, log.file(), largestOffset);
             // Update the in memory max timestamp and corresponding offset.
@@ -270,6 +281,7 @@ public class LogSegment implements Closeable {
             }
             // append an entry to the index (if needed)
             // 如果当前累计追加的日志字节数超过阈值（对应 index.interval.bytes 配置）
+            // 更新索引项
             if (bytesSinceLastIndexEntry > indexIntervalBytes) {
                 // 更新 index 和 timeindex 文件
                 offsetIndex().append(largestOffset, physicalPosition);
@@ -441,7 +453,12 @@ public class LogSegment implements Closeable {
      */
     public FetchDataInfo read(long startOffset, // 读取消息的起始 offset
                               int maxSize, // 读取消息的最大字节数
-                              Optional<Long> maxPositionOpt, boolean minOneMessage) throws IOException {
+                              // 能读到的最大文件位置
+                              Optional<Long> maxPositionOpt,
+                              // 是否允许在消息体过大时至少返回第一条消息
+                              // 当这个参数为 true 时，即使出现消息体字节数超过了 maxSize 的情形，read 方法依然能返回至少一条消息。
+                              // 引入这个参数主要是为了确保不出现消费饿死的情况
+                              boolean minOneMessage) throws IOException {
         if (maxSize < 0)
             throw new IllegalArgumentException("Invalid max size " + maxSize + " for log read from segment " + log);
 
@@ -475,7 +492,9 @@ public class LogSegment implements Closeable {
         int fetchSize = Math.min((int) (maxPositionOpt.get() - startPosition), adjustedMaxSize);
 
         // 读取对应的消息数据，并封装成 FetchDataInfo 对象返回
-        return new FetchDataInfo(offsetMetadata, log.slice(startPosition, fetchSize),
+        return new FetchDataInfo(offsetMetadata,
+                // 从指定位置读取指定大小的消息集合
+                log.slice(startPosition, fetchSize),
             adjustedMaxSize < startOffsetAndSize.size, Optional.empty());
     }
 
@@ -495,17 +514,25 @@ public class LogSegment implements Closeable {
      * @param leaderEpochCache Optionally a cache for updating the leader epoch during recovery.
      * @return The number of bytes truncated from the log
      * @throws LogSegmentOffsetOverflowException if the log segment contains an offset that causes the index offset to overflow
+     *
+     *
+     *  重启后恢复日志段的操作逻辑
+     *  Broker 在启动时会从磁盘上加载所有日志段信息到内存中，并创建相应的 LogSegment 对象实例
      */
     public int recover(ProducerStateManager producerStateManager, Optional<LeaderEpochFileCache> leaderEpochCache) throws IOException {
+        // 清空所有的索引文件
         offsetIndex().reset();
         timeIndex().reset();
         txnIndex.reset();
         int validBytes = 0;
         int lastIndexEntry = 0;
-        maxTimestampAndOffsetSoFar = TimestampOffset.UNKNOWN;
+        maxTimestampAndOffsetSoFar = TimestampOffset.UNKNOWN;l
         try {
+            // 遍历日志段中的所有消息集合或消息批次（RecordBatch）
             for (RecordBatch batch : log.batches()) {
+                // 该集合中的消息必须要符合 Kafka 定义的二进制格式
                 batch.ensureValid();
+                // 该集合中最后一条消息的位移值不能越界，即它与日志段起始位移的差值必须是一个正整数值
                 ensureOffsetInRange(batch.lastOffset());
 
                 // The max timestamp is exposed at the batch level, so no need to iterate the records
@@ -538,7 +565,9 @@ public class LogSegment implements Closeable {
         if (truncated > 0)
             LOGGER.debug("Truncated {} invalid bytes at the end of segment {} during recovery", truncated, log.file().getAbsolutePath());
 
+        // 将日志段当前总字节数和刚刚累加的已读取字节数进行比较，如果发现前者比后者大，说明日志段写入了一些非法消息，需要执行截断操作，将日志段大小调整回合法的数值
         log.truncateTo(validBytes);
+        // 相应地调整索引文件的大小
         offsetIndex().trimToValidSize();
         // A normally closed segment always appends the biggest timestamp ever seen into log segment, we do this as well.
         timeIndex().maybeAppend(maxTimestampSoFar(), shallowOffsetOfMaxTimestampSoFar(), true);
