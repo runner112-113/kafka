@@ -191,7 +191,7 @@ class KafkaRequestHandler(
   def awaitShutdown(): Unit = shutdownComplete.await()
 
 }
-
+ // 真正的处理逻辑
 class KafkaRequestHandlerPool(
   val brokerId: Int,
   val requestChannel: RequestChannel,

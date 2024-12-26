@@ -50,6 +50,7 @@ object RequestChannel extends Logging {
 
   private def isRequestLoggingEnabled: Boolean = requestLogger.underlying.isDebugEnabled
 
+  // 请求接口
   sealed trait BaseRequest
   case object ShutdownRequest extends BaseRequest
   case object WakeupRequest extends BaseRequest
@@ -57,11 +58,11 @@ object RequestChannel extends Logging {
   case class CallbackRequest(fun: RequestLocal => Unit,
                              originalRequest: Request) extends BaseRequest
 
-  class Request(val processor: Int,
-                val context: RequestContext,
+  class Request(val processor: Int, // processor 是 Processor 线程的序号，即这个请求是由哪个 Processor 线程接收处理的
+                val context: RequestContext, // 用来标识请求上下文信息的
                 val startTimeNanos: Long,
-                val memoryPool: MemoryPool,
-                @volatile var buffer: ByteBuffer,
+                val memoryPool: MemoryPool, // 一个非阻塞式的内存缓冲区，主要作用是避免 Request 对象无限使用内存
+                @volatile var buffer: ByteBuffer, // 真正保存 Request 对象内容的字节缓冲区
                 metrics: RequestChannelMetrics,
                 val envelope: Option[RequestChannel.Request] = None) extends BaseRequest {
     // These need to be volatile because the readers are in the network thread and the writers are in the request
@@ -282,6 +283,10 @@ object RequestChannel extends Logging {
 
   }
 
+  /**
+   * 每个 Response 对象都包含了对应的 Request 对象。
+   * 这个类里最重要的方法是 onComplete 方法，用来实现每类 Response 被处理后需要执行的回调逻辑
+   */
   sealed abstract class Response(val request: Request) {
 
     def processor: Int = request.processor
@@ -309,22 +314,26 @@ object RequestChannel extends Logging {
       s"Response(type=NoOp, request=$request)"
   }
 
+  // 用于出错后需要关闭 TCP 连接的场景，此时返回 CloseConnectionResponse 给 Request 发送方，显式地通知它关闭连接。
   class CloseConnectionResponse(request: Request) extends Response(request) {
     override def toString: String =
       s"Response(type=CloseConnection, request=$request)"
   }
 
+  // 用于通知 Broker 的 Socket Server 组件（后面几节课我会讲到它）某个 TCP 连接通信通道开始被限流（throttling）
   class StartThrottlingResponse(request: Request) extends Response(request) {
     override def toString: String =
       s"Response(type=StartThrottling, request=$request)"
   }
 
+  // 与 StartThrottlingResponse 对应，通知 Broker 的 SocketServer 组件某个 TCP 连接通信通道的限流已结束
   class EndThrottlingResponse(request: Request) extends Response(request) {
     override def toString: String =
       s"Response(type=EndThrottling, request=$request)"
   }
 }
 
+// 传输 Request/Response 的通道
 class RequestChannel(val queueSize: Int,
                      val metricNamePrefix: String,
                      time: Time,
@@ -334,9 +343,11 @@ class RequestChannel(val queueSize: Int,
   private val metricsGroup = new KafkaMetricsGroup(this.getClass)
 
   // 请求队列，所有的 Processor 共用一个
+  // 当Broker启动时，SocketServer组件会创建RequestChannel对象，并把Broker端参数queued.max.requests 赋值给queueSize
   private val requestQueue = new ArrayBlockingQueue[BaseRequest](queueSize)
   // 一个Acceptor对应的多个processor
-  private val processors = new ConcurrentHashMap[Int, Processor]()
+  // processors的数量有=由num.network.threads控制
+  private val processors = new ConcurrentHashMap[Int/*processor的序号*/, Processor/*processor*/]()
   private val requestQueueSizeMetricName = metricNamePrefix.concat(RequestQueueSizeMetric)
   private val responseQueueSizeMetricName = metricNamePrefix.concat(ResponseQueueSizeMetric)
   private val callbackQueue = new ArrayBlockingQueue[BaseRequest](queueSize)
@@ -363,6 +374,7 @@ class RequestChannel(val queueSize: Int,
   }
 
   /** Send a request to be handled, potentially blocking until there is room in the queue for the request */
+    // 存放到requestQueue
   def sendRequest(request: RequestChannel.Request): Unit = {
     requestQueue.put(request)
   }
@@ -437,10 +449,12 @@ class RequestChannel(val queueSize: Int,
       case _: StartThrottlingResponse | _: EndThrottlingResponse => ()
     }
 
+    // 获取到之前处理请求的processor
     val processor = processors.get(response.processor)
     // The processor may be null if it was shutdown. In this case, the connections
     // are closed, so the response is dropped.
     if (processor != null) {
+      // 加入到processor中的responseQueue
       processor.enqueueResponse(response)
     }
   }
@@ -462,6 +476,7 @@ class RequestChannel(val queueSize: Int,
   }
 
   /** Get the next request or block until there is one */
+    // 从requestQueue中取出
   def receiveRequest(): RequestChannel.BaseRequest =
     requestQueue.take()
 

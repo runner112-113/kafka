@@ -92,6 +92,8 @@ public final class LogFileUtils {
      *
      * @param offset The offset to use in the file name
      * @return The filename
+     *
+     * 通过给定的位移值计算出对应的日志段文件名
      */
     public static String filenamePrefixFromOffset(long offset) {
         NumberFormat nf = NumberFormat.getInstance();
