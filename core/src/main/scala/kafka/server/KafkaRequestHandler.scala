@@ -84,14 +84,16 @@ object KafkaRequestHandler {
 
 /**
  * A thread that answers kafka requests.
+ *
+ * Kafka I/O线程 用于执行请求处理逻辑
  */
 class KafkaRequestHandler(
-  id: Int,
-  brokerId: Int,
+  id: Int, // I/O线程序号
+  brokerId: Int, // 所在Broker序号，即broker.id值
   val aggregateIdleMeter: Meter,
-  val totalHandlerThreads: AtomicInteger,
-  val requestChannel: RequestChannel,
-  apis: ApiRequestHandler,
+  val totalHandlerThreads: AtomicInteger, // I/O线程池大小
+  val requestChannel: RequestChannel, // 请求处理通道
+  apis: ApiRequestHandler, // KafkaApis类，用于真正实现请求处理逻辑的类
   time: Time,
   nodeName: String = "broker"
 ) extends Runnable with Logging {
@@ -109,14 +111,19 @@ class KafkaRequestHandler(
       // time should be discounted by # threads.
       val startSelectTime = time.nanoseconds
 
+      // 从请求队列中获取下一个待处理的请求
       val req = requestChannel.receiveRequest(300)
       val endTime = time.nanoseconds
+      // 统计线程空闲时间
       val idleTime = endTime - startSelectTime
+      // 更新线程空闲百分比指标
       aggregateIdleMeter.mark(idleTime / totalHandlerThreads.get)
 
       req match {
+        // 关闭线程请求
         case RequestChannel.ShutdownRequest =>
           debug(s"Kafka request handler $id on broker $brokerId received shut down command")
+          // 执行关闭操作
           completeShutdown()
           return
 
@@ -150,6 +157,7 @@ class KafkaRequestHandler(
             threadCurrentRequest.remove()
           }
 
+        // 普通请求
         case request: RequestChannel.Request =>
           try {
             request.requestDequeueTimeNanos = endTime
@@ -193,11 +201,11 @@ class KafkaRequestHandler(
 }
  // 真正的处理逻辑
 class KafkaRequestHandlerPool(
-  val brokerId: Int,
-  val requestChannel: RequestChannel,
+  val brokerId: Int, // 和 KafkaRequestHandler 中的一样，保存 Broker 的序号
+  val requestChannel: RequestChannel, // SocketServer 的请求处理通道，它下辖的请求队列为所有 I/O 线程所共享
   val apis: ApiRequestHandler,
   time: Time,
-  numThreads: Int,
+  numThreads: Int, // 线程池中的初始线程数量。它是 Broker 端参数 num.io.threads 的值。目前，Kafka 支持动态修改 I/O 线程池的大小，因此，这里的 numThreads 是初始线程数，调整后的 I/O 线程池的实际大小可以和 numThreads 不一致
   requestHandlerAvgIdleMetricName: String,
   logAndThreadNamePrefix : String,
   nodeName: String = "broker"
@@ -214,11 +222,18 @@ class KafkaRequestHandlerPool(
     createHandler(i)
   }
 
+   /**
+    * 创建序号为指定id的I/O线程对象，并启动该线程
+    */
   def createHandler(id: Int): Unit = synchronized {
     runnables += new KafkaRequestHandler(id, brokerId, aggregateIdleMeter, threadPoolSize, requestChannel, apis, time, nodeName)
     KafkaThread.daemon(logAndThreadNamePrefix + "-kafka-request-handler-" + id, runnables(id)).start()
   }
 
+   /**
+    * 把 I/O 线程池的线程数重设为指定的数值
+    * @param newSize
+    */
   def resizeThreadPool(newSize: Int): Unit = synchronized {
     val currentSize = threadPoolSize.get
     info(s"Resizing request handler thread pool size from $currentSize to $newSize")

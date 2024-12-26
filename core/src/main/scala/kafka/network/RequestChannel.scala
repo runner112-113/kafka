@@ -454,7 +454,7 @@ class RequestChannel(val queueSize: Int,
     // The processor may be null if it was shutdown. In this case, the connections
     // are closed, so the response is dropped.
     if (processor != null) {
-      // 加入到processor中的responseQueue
+      // // 将Response添加到该Processor线程的Response队列上
       processor.enqueueResponse(response)
     }
   }

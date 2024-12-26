@@ -1107,7 +1107,7 @@ private[kafka] class Processor(
       val channelId = currentResponse.request.context.connectionId // 获取连接通道ID
       try {
         currentResponse match {
-          case response: NoOpResponse =>
+          case response: NoOpResponse => //不需要发送Response
             // There is no response to send to the client, we need to read more pipelined requests
             // that are sitting in the server's socket buffer
             updateRequestMetrics(response)
@@ -1118,7 +1118,7 @@ private[kafka] class Processor(
             handleChannelMuteEvent(channelId, ChannelMuteEvent.RESPONSE_SENT)
             tryUnmuteChannel(channelId)
 
-          case response: SendResponse =>
+          case response: SendResponse =>// 需要发送Response
             sendResponse(response, response.responseSend)
           case response: CloseConnectionResponse =>
             updateRequestMetrics(response)
@@ -1180,6 +1180,7 @@ private[kafka] class Processor(
   }
 
   private def processCompletedReceives(): Unit = {
+    // 从Selector中提取已接收到的所有请求数据
     selector.completedReceives.forEach { receive =>
       try {
         openOrClosingChannel(receive.source) match {
@@ -1201,6 +1202,7 @@ private[kafka] class Processor(
                   channel.principal, listenerName, securityProtocol, channel.channelMetadataRegistry.clientInformation,
                   isPrivilegedListener, channel.principalSerde)
 
+                // 根据Channel中获取的Receive对象，构建Request对象
                 val req = new RequestChannel.Request(processor = id, context = context,
                   startTimeNanos = nowNanos, memoryPool, receive.payload, requestChannel.metrics, None)
 

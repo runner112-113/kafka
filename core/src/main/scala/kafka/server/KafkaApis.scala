@@ -193,6 +193,12 @@ class KafkaApis(val requestChannel: RequestChannel,
         throw new IllegalStateException(s"API ${request.header.apiKey} with version ${request.header.apiVersion} is not enabled")
       }
 
+      // 根据请求头部信息中的apiKey字段判断属于哪类请求
+      // 然后调用响应的handle***方法
+      // 如果新增RPC协议类型，则：
+      // 1. 添加新的apiKey标识新请求类型
+      // 2. 添加新的case分支
+      // 3. 添加对应的handle***方法
       request.header.apiKey match {
         case ApiKeys.PRODUCE => handleProduceRequest(request, requestLocal)
         case ApiKeys.FETCH => handleFetchRequest(request)
@@ -287,6 +293,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       // Delayed fetches are also completed by ReplicaFetcherThread.
       replicaManager.tryCompleteActions()
       // The local completion time may be set while processing the request. Only record it if it's unset.
+      // 记录一下请求本地完成时间，即Broker处理完该请求的时间
       if (request.apiLocalCompleteTimeNanos < 0)
         request.apiLocalCompleteTimeNanos = time.nanoseconds
     }
@@ -1963,6 +1970,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       createTopicsRequest.data.topics.forEach { topic =>
         results.add(new CreatableTopicResult().setName(topic.name))
       }
+      // 是否具有CLUSTER资源的CREATE权限
       val hasClusterAuthorization = authHelper.authorize(request.context, CREATE, CLUSTER, CLUSTER_NAME,
         logIfDenied = false)
 
