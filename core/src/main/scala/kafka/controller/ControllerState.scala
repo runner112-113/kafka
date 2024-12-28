@@ -23,6 +23,10 @@ sealed abstract class ControllerState {
 
   def value: Byte
 
+  /**
+   * 用于构造 Controller 状态速率的监控指标名称的
+   * @return
+   */
   def rateAndTimeMetricName: Option[String] =
     if (hasRateAndTimeMetric) Some(s"${toString}RateAndTimeMs") else None
 
