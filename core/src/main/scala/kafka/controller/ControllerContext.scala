@@ -72,26 +72,43 @@ case class ReplicaAssignment private (replicas: Seq[Int],
     s"removingReplicas=${removingReplicas.mkString(",")})"
 }
 
+// 保存Controller元数据的容器
 class ControllerContext extends ControllerChannelContext {
+  // Controller统计信息类
   val stats = new ControllerStats
+  // 离线分区计数器
   var offlinePartitionCount = 0
   var preferredReplicaImbalanceCount = 0
+  // 关闭中Broker的Id列表
   val shuttingDownBrokerIds = mutable.Set.empty[Int]
+  // 当前运行中Broker对象列表
   private val liveBrokers = mutable.Set.empty[Broker]
+  // 运行中Broker Epoch列表
   private val liveBrokerEpochs = mutable.Map.empty[Int, Long]
+  // Controller当前Epoch值
   var epoch: Int = KafkaController.InitialControllerEpoch
+  // Controller对应ZooKeeper节点的Epoch值
   var epochZkVersion: Int = KafkaController.InitialControllerEpochZkVersion
 
+  // 集群主题列表
   val allTopics = mutable.Set.empty[String]
+
   var topicIds = mutable.Map.empty[String, Uuid]
   var topicNames = mutable.Map.empty[Uuid, String]
+  // 主题分区的副本列表
   val partitionAssignments = mutable.Map.empty[String, mutable.Map[Int, ReplicaAssignment]]
+  // 主题分区的Leader/ISR副本信息
   private val partitionLeadershipInfo = mutable.Map.empty[TopicPartition, LeaderIsrAndControllerEpoch]
+  // 正处于副本重分配过程的主题分区列表
   val partitionsBeingReassigned = mutable.Set.empty[TopicPartition]
+  // 主题分区状态列表
   val partitionStates = mutable.Map.empty[TopicPartition, PartitionState]
+  // 主题分区的副本状态列表
   val replicaStates = mutable.Map.empty[PartitionAndReplica, ReplicaState]
+  // 不可用磁盘路径上的副本列表
   val replicasOnOfflineDirs = mutable.Map.empty[Int, Set[TopicPartition]]
 
+  // 待删除主题列表
   val topicsToBeDeleted = mutable.Set.empty[String]
 
   /** The following topicsWithDeletionStarted variable is used to properly update the offlinePartitionCount metric.
@@ -113,7 +130,9 @@ class ControllerContext extends ControllerChannelContext {
    * NonExistentPartition state. Once a topic is in the topicsWithDeletionStarted set, we will stop monitoring
    * its partition state changes in the offlinePartitionCount metric
    */
+  // 已开启删除的主题列表
   val topicsWithDeletionStarted = mutable.Set.empty[String]
+  // 暂时无法执行删除的主题列表
   val topicsIneligibleForDeletion = mutable.Set.empty[String]
 
   private def clearTopicsState(): Unit = {
@@ -224,6 +243,7 @@ class ControllerContext extends ControllerChannelContext {
   def liveBrokerIdAndEpochs: Map[Int, Long] = liveBrokerEpochs
   def liveOrShuttingDownBroker(brokerId: Int): Option[Broker] = liveOrShuttingDownBrokers.find(_.id == brokerId)
 
+  // 获取某个Broker上的所有分区信息
   def partitionsOnBroker(brokerId: Int): Set[TopicPartition] = {
     partitionAssignments.flatMap {
       case (topic, topicReplicaAssignment) => topicReplicaAssignment.filter {

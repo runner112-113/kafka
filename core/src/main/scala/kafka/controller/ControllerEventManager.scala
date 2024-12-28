@@ -69,6 +69,7 @@ class QueuedEvent(val event: ControllerEvent,
   }
 }
 
+// 定义各种Controller事件以及这些事件的处理
 class ControllerEventManager(controllerId: Int,
                              processor: ControllerEventProcessor,
                              time: Time,
