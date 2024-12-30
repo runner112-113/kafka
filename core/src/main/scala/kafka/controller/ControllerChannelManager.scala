@@ -78,8 +78,10 @@ class ControllerChannelManager(controllerEpoch: () => Int,
    * @param initialBrokers
    */
   def startup(initialBrokers: Set[Broker]):Unit = {
+    // 建立和每个broker通信的线程
     initialBrokers.foreach(addNewBroker)
 
+    // 启动每一个RequestSendThread线程
     brokerLock synchronized {
       brokerStateInfo.foreach(brokerState => startRequestSendThread(brokerState._1))
     }
