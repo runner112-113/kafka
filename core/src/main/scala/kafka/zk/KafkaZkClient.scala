@@ -307,6 +307,7 @@ class KafkaZkClient private[zk] (
    * @return sequence of CreateResponse whose contexts are the partitions they are associated with.
    */
   def createTopicPartitionStatesRaw(leaderIsrAndControllerEpochs: Map[TopicPartition, LeaderIsrAndControllerEpoch], expectedControllerEpochZkVersion: Int): Seq[CreateResponse] = {
+    // 在 ZooKeeper 中，创建并写入分区节点数据。节点的位置是/brokers/topics/<topic>/partitions/<partition>，每个节点都要包含分区的 Leader 和 ISR 等数据
     createTopicPartitions(leaderIsrAndControllerEpochs.keys.map(_.topic).toSeq.distinct, expectedControllerEpochZkVersion)
     createTopicPartition(leaderIsrAndControllerEpochs.keys.toSeq, expectedControllerEpochZkVersion)
     val createRequests = leaderIsrAndControllerEpochs.map { case (partition, leaderIsrAndControllerEpoch) =>

@@ -458,6 +458,7 @@ class ZkPartitionStateMachine(config: KafkaConfig,
         // 为因Broker正常关闭而受影响的分区选举Leader
         leaderForControlledShutdown(controllerContext, validLeaderAndIsrs).partition(_.leaderAndIsr.isEmpty)
     }
+    // 将所有选举失败的分区全部加入到Leader选举失败分区列表
     partitionsWithoutLeaders.foreach { electionResult =>
       val partition = electionResult.topicPartition
       val failMsg = s"Failed to elect leader for partition $partition under strategy $partitionLeaderElectionStrategy"
@@ -465,8 +466,12 @@ class ZkPartitionStateMachine(config: KafkaConfig,
     }
     val recipientsPerPartition = partitionsWithLeaders.map(result => result.topicPartition -> result.liveReplicas).toMap
     val adjustedLeaderAndIsrs = partitionsWithLeaders.map(result => result.topicPartition -> result.leaderAndIsr.get).toMap
+    // 使用新选举的Leader和ISR信息更新ZooKeeper上分区的znode节点数据
     val UpdateLeaderAndIsrResult(finishedUpdates, updatesToRetry) = zkClient.updateLeaderAndIsr(
       adjustedLeaderAndIsrs, controllerContext.epoch, controllerContext.epochZkVersion)
+    // 对于ZooKeeper znode节点数据更新成功的分区，封装对应的Leader和ISR信息
+    // 构建LeaderAndIsr请求，并将该请求加入到Controller待发送请求集合
+    // 等待后续统一发送
     finishedUpdates.foreachEntry { (partition, result) =>
       result.foreach { leaderAndIsr =>
         val replicaAssignment = controllerContext.partitionFullReplicaAssignment(partition)
@@ -484,6 +489,8 @@ class ZkPartitionStateMachine(config: KafkaConfig,
       }
     }
 
+    // 返回选举结果，包括成功选举并更新ZooKeeper节点的分区、选举失败分区以及
+    // ZooKeeper节点更新失败的分区
     (finishedUpdates ++ failedElections, updatesToRetry)
   }
 
