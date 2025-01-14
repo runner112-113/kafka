@@ -1243,6 +1243,10 @@ class Partition(val topicPartition: TopicPartition,
     delayedOperations.checkAndCompleteAll()
   }
 
+  /**
+   * 收缩是指，把 ISR 副本集合中那些与 Leader 差距过大的副本移除的过程。
+   * 所谓的差距过大，就是 ISR 中 Follower 副本滞后 Leader 副本的时间，超过了 Broker 端参数 replica.lag.time.max.ms 值的 1.5 倍。
+   */
   def maybeShrinkIsr(): Unit = {
     def needsIsrUpdate: Boolean = {
       !partitionState.isInflight && inReadLock(leaderIsrUpdateLock) {

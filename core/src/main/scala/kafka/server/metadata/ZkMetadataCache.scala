@@ -56,10 +56,12 @@ trait ZkFinalizedFeatureCache {
   def getFeatureOption: Option[FinalizedFeatures]
 }
 
-case class MetadataSnapshot(partitionStates: mutable.AnyRefMap[String, mutable.LongMap[UpdateMetadataPartitionState]],
+case class MetadataSnapshot(partitionStates: mutable.AnyRefMap[String/*主题名称*/, mutable.LongMap[UpdateMetadataPartitionState]],
                             topicIds: Map[String, Uuid],
-                            controllerId: Option[CachedControllerId],
-                            aliveBrokers: mutable.LongMap[Broker],
+                            controllerId: Option[CachedControllerId], // Controller 所在 Broker 的 ID
+                            aliveBrokers: mutable.LongMap[Broker], // 当前集群中所有存活着的 Broker 对象列表
+                           // 这也是一个 Map 的 Map 类型。其 Key 是 Broker ID 序号，Value 是 Map 类型，
+                            // 其 Key 是 ListenerName，即 Broker 监听器类型，而 Value 是 Broker 节点对象
                             aliveNodes: mutable.LongMap[collection.Map[ListenerName, Node]]) {
   val topicNames: Map[Uuid, String] = topicIds.map { case (topicName, topicId) => (topicId, topicName) }
 }
@@ -166,6 +168,7 @@ class ZkMetadataCache(
   //replace the value with a completely new one. this means reads (which are not under any lock) need to grab
   //the value of this var (into a val) ONCE and retain that read copy for the duration of their operation.
   //multiple reads of this value risk getting different snapshots.
+  // 保存了实际的元数据信息
   @volatile private var metadataSnapshot: MetadataSnapshot = MetadataSnapshot(
     partitionStates = mutable.AnyRefMap.empty,
     topicIds = Map.empty,
@@ -320,6 +323,7 @@ class ZkMetadataCache(
     (Collections.unmodifiableMap(snapshot.topicIds.asJava), Collections.unmodifiableMap(snapshot.topicNames.asJava))
   }
 
+  // 获取当前集群元数据缓存中的所有主题
   override def getAllTopics(): Set[String] = {
     getAllTopics(metadataSnapshot)
   }
@@ -370,6 +374,7 @@ class ZkMetadataCache(
     infos(partitionId) = stateInfo
   }
 
+  // 获取给定主题分区的详细数据信息。如果没有找到对应记录，返回None
   def getPartitionInfo(topic: String, partitionId: Int): Option[UpdateMetadataPartitionState] = {
     metadataSnapshot.partitionStates.get(topic).flatMap(_.get(partitionId))
   }
@@ -396,13 +401,18 @@ class ZkMetadataCache(
   }
 
   def getPartitionReplicaEndpoints(tp: TopicPartition, listenerName: ListenerName): Map[Int, Node] = {
+    // 使用局部变量获取当前元数据缓存
     val snapshot = metadataSnapshot
+    // 获取给定主题分区的数据
     snapshot.partitionStates.get(tp.topic).flatMap(_.get(tp.partition)).map { partitionInfo =>
+      // 拿到副本Id列表
       val replicaIds = partitionInfo.replicas
       replicaIds.asScala
         .map(replicaId => replicaId.intValue() -> {
+          // 获取副本所在的Broker Id
           snapshot.aliveBrokers.get(replicaId.longValue()) match {
             case Some(broker) =>
+              // 根据Broker Id去获取对应的Broker节点对象
               broker.getNode(listenerName).getOrElse(Node.noNode())
             case None =>
               Node.noNode()
@@ -462,6 +472,7 @@ class ZkMetadataCache(
   // Note: if this ZK broker is migrating to KRaft, a singular UMR may sometimes both delete a
   // partition and re-create a new partition with that same name. In that case, it will not appear
   // in the return value of this function.
+  // updateMetadata主要逻辑就是读取 UpdateMetadataRequest请求中的分区数据，然后更新本地元数据缓存
   def updateMetadata(
     correlationId: Int,
     originalUpdateMetadataRequest: UpdateMetadataRequest
@@ -525,17 +536,21 @@ class ZkMetadataCache(
             Some(ZkCachedControllerId(id))
       }
 
+      // 遍历UpdateMetadataRequest请求中的所有存活Broker对象
       updateMetadataRequest.liveBrokers.forEach { broker =>
         // `aliveNodes` is a hot path for metadata requests for large clusters, so we use java.util.HashMap which
         // is a bit faster than scala.collection.mutable.HashMap. When we drop support for Scala 2.10, we could
         // move to `AnyRefMap`, which has comparable performance.
         val nodes = new java.util.HashMap[ListenerName, Node]
         val endPoints = new mutable.ArrayBuffer[EndPoint]
+        // 遍历它的所有EndPoint类型，也就是为Broker配置的监听器
         broker.endpoints.forEach { ep =>
           val listenerName = new ListenerName(ep.listener)
           endPoints += new EndPoint(ep.host, ep.port, listenerName, SecurityProtocol.forId(ep.securityProtocol))
+          // 将<监听器，Broker节点对象>对保存起来
           nodes.put(listenerName, new Node(broker.id, ep.host, ep.port, broker.rack()))
         }
+        // 将Broker加入到存活Broker对象集合
         aliveBrokers(broker.id) = Broker(broker.id, endPoints, Option(broker.rack))
         aliveNodes(broker.id) = nodes.asScala
       }
@@ -553,13 +568,17 @@ class ZkMetadataCache(
       newZeroIds.foreach { case (zeroIdTopic, _) => topicIds.remove(zeroIdTopic) }
       topicIds ++= newTopicIds.toMap
 
+      // 构造已删除分区数组，将其作为方法返回结果
       val deletedPartitions = new java.util.LinkedHashSet[TopicPartition]
+      // UpdateMetadataRequest请求没有携带任何分区信息
       if (!updateMetadataRequest.partitionStates.iterator.hasNext) {
+        // 构造新的MetadataSnapshot对象，使用之前的分区信息和新的Broker列表信息
         metadataSnapshot = MetadataSnapshot(metadataSnapshot.partitionStates, topicIds.toMap,
           controllerIdOpt, aliveBrokers, aliveNodes)
       } else {
         //since kafka may do partial metadata updates, we start by copying the previous state
         val partitionStates = new mutable.AnyRefMap[String, mutable.LongMap[UpdateMetadataPartitionState]](metadataSnapshot.partitionStates.size)
+        // 备份现有元数据缓存中的分区数据
         metadataSnapshot.partitionStates.foreachEntry { (topic, oldPartitionStates) =>
           val copy = new mutable.LongMap[UpdateMetadataPartitionState](oldPartitionStates.size)
           copy ++= oldPartitionStates
@@ -569,17 +588,23 @@ class ZkMetadataCache(
         val traceEnabled = stateChangeLogger.isTraceEnabled
         val controllerId = updateMetadataRequest.controllerId
         val controllerEpoch = updateMetadataRequest.controllerEpoch
+        // 获取UpdateMetadataRequest请求中携带的所有分区数据
         val newStates = updateMetadataRequest.partitionStates.asScala
+        // 遍历分区数据
         newStates.foreach { state =>
           // per-partition logging here can be very expensive due going through all partitions in the cluster
           val tp = new TopicPartition(state.topicName, state.partitionIndex)
+          // 如果分区处于被删除过程中
           if (state.leader == LeaderAndIsr.LEADER_DURING_DELETE) {
+            // 将分区从元数据缓存中移除
             removePartitionInfo(partitionStates, topicIds, tp.topic, tp.partition)
             if (traceEnabled)
               stateChangeLogger.trace(s"Deleted partition $tp from metadata cache in response to UpdateMetadata " +
                 s"request sent by controller $controllerId epoch $controllerEpoch with correlation id $correlationId")
+            // 将分区加入到返回结果数据
             deletedPartitions.add(tp)
           } else {
+            // 将分区加入到元数据缓存
             addOrUpdatePartitionInfo(partitionStates, tp.topic, tp.partition, state)
             deletedPartitions.remove(tp)
             if (traceEnabled)
@@ -591,16 +616,20 @@ class ZkMetadataCache(
         stateChangeLogger.info(s"Add $cachedPartitionsCount partitions and deleted ${deletedPartitions.size} partitions from metadata cache " +
           s"in response to UpdateMetadata request sent by controller $controllerId epoch $controllerEpoch with correlation id $correlationId")
 
+        // 使用更新过的分区元数据，和第一部分计算的存活Broker列表及节点列表，构建最新的元数据缓存
         metadataSnapshot = MetadataSnapshot(partitionStates, topicIds.toMap, controllerIdOpt, aliveBrokers, aliveNodes)
       }
+      // 返回已删除分区列表数组
       deletedPartitions.asScala.toSeq
     }
   }
 
+  // 判断给定主题是否包含在元数据缓存中
   def contains(topic: String): Boolean = {
     metadataSnapshot.partitionStates.contains(topic)
   }
 
+  // 判断给定主题分区是否包含在元数据缓存中
   def contains(tp: TopicPartition): Boolean = getPartitionInfo(tp.topic, tp.partition).isDefined
 
   private def removePartitionInfo(partitionStates: mutable.AnyRefMap[String, mutable.LongMap[UpdateMetadataPartitionState]],

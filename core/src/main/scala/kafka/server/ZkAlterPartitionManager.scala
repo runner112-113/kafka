@@ -55,6 +55,10 @@ class ZkAlterPartitionManager(scheduler: Scheduler, time: Time, zkClient: KafkaZ
   private val lastIsrPropagationMs = new AtomicLong(time.milliseconds())
 
   override def start(): Unit = {
+    /**
+     * ISR 收缩之后，ReplicaManager 还需要将这个操作的结果传递给集群的其他 Broker，以同步这个操作的结果。
+     * 这是由 ISR 通知事件来完成的。
+     */
     scheduler.schedule("isr-change-propagation", () => maybePropagateIsrChanges(), 0L,
       isrChangeNotificationConfig.checkIntervalMs)
   }
@@ -99,11 +103,17 @@ class ZkAlterPartitionManager(scheduler: Scheduler, time: Time, zkClient: KafkaZ
   private[server] def maybePropagateIsrChanges(): Unit = {
     val now = time.milliseconds()
     isrChangeSet synchronized {
+      // ISR变更传播的条件，需要同时满足：
+      // 1. 存在尚未被传播的ISR变更
+      // 2. 最近5秒没有任何ISR变更，或者自上次ISR变更已经有超过1分钟的时间
       if (isrChangeSet.nonEmpty &&
         (lastIsrChangeMs.get() + isrChangeNotificationConfig.lingerMs < now ||
           lastIsrPropagationMs.get() + isrChangeNotificationConfig.maxDelayMs < now)) {
+        // 创建ZooKeeper相应的Znode节点
         zkClient.propagateIsrChanges(isrChangeSet)
+        // 清空isrChangeSet集合
         isrChangeSet.clear()
+        // 更新最近ISR变更时间戳
         lastIsrPropagationMs.set(now)
       }
     }

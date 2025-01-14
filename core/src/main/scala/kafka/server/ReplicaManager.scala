@@ -171,6 +171,8 @@ case class LogReadResult(info: FetchDataInfo,
  * log record from the Quorum controller indicating that the broker should be either a leader
  * or follower of a partition.
  */
+// 表示 Broker 本地保存的分区对象的状态。
+// 可能的状态包括：不存在状态（None）、在线状态（Online）和离线状态（Offline）
 sealed trait HostedPartition
 
 object HostedPartition {
@@ -274,7 +276,10 @@ class ReplicaManager(val config: KafkaConfig,
                      val logManager: LogManager,
                      val remoteLogManager: Option[RemoteLogManager] = None,
                      quotaManagers: QuotaManagers,
+                    // 这是 Broker 端的元数据缓存，保存集群上分区的 Leader、ISR 等信息。
+                     // 注意，它和我们之前说的 Controller 端元数据缓存是有联系的。每台 Broker 上的元数据缓存，是从 Controller 端的元数据缓存异步同步过来的
                      val metadataCache: MetadataCache,
+                    // 这是失效日志路径的处理器类
                      logDirFailureChannel: LogDirFailureChannel,
                      val alterPartitionManager: AlterPartitionManager,
                      val brokerTopicStats: BrokerTopicStats = new BrokerTopicStats(),
@@ -317,12 +322,16 @@ class ReplicaManager(val config: KafkaConfig,
       purgatoryName = "RemoteListOffsets", brokerId = config.brokerId))
 
   /* epoch of the controller that last changed the leader */
+  // 这个字段的作用是隔离过期 Controller 发送的请求。
   @volatile private[server] var controllerEpoch: Int = KafkaController.InitialControllerEpoch
   protected val localBrokerId = config.brokerId
+  // Broker 上保存的所有分区对象数据
+  // allPartitions 会将所有分区对象初始化成 Online 状态
   protected val allPartitions = new Pool[TopicPartition, HostedPartition](
     valueFactory = Some(tp => HostedPartition.Online(Partition(tp, time, this)))
   )
   private val replicaStateChangeLock = new Object
+  // 主要任务是创建 ReplicaFetcherThread 类实例
   val replicaFetcherManager = createReplicaFetcherManager(metrics, time, threadNamePrefix, quotaManagers.follower)
   private[server] val replicaAlterLogDirsManager = createReplicaAlterLogDirsManager(quotaManagers.alterLogDirs, brokerTopicStats)
   private val highWatermarkCheckPointThreadStarted = new AtomicBoolean(false)
@@ -765,10 +774,17 @@ class ReplicaManager(val config: KafkaConfig,
    * @param actionQueue                   the action queue to use. ReplicaManager#defaultActionQueue is used by default.
    * @param verificationGuards            the mapping from topic partition to verification guards if transaction verification is used
    */
-  def appendRecords(timeout: Long,
+  def appendRecords(timeout: Long, // 请求处理超时时间。对于生产者来说，它就是 request.timeout.ms 参数值。
+                   // 是否需要等待其他副本写入。对于生产者而言，它就是 acks 参数的值。
+                    // 而在其他场景中，Kafka 默认使用 -1，表示等待其他副本全部写入成功再返回
                     requiredAcks: Short,
+                   //是否允许向内部主题写入消息。对于普通的生产者而言，该字段是 False，即不允许写入内部主题。
+                    // 对于 Coordinator 组件，特别是消费者组 GroupCoordinator 组件来说，它的职责之一就是向内部位移主题写入消息，
+                    // 因此，此时，该字段值是 True。
                     internalTopicsAllowed: Boolean,
+                   // 写入方来源
                     origin: AppendOrigin,
+                    // 按分区分组的、实际要写入的消息集合
                     entriesPerPartition: Map[TopicPartition, MemoryRecords],
                     responseCallback: Map[TopicPartition, PartitionResponse] => Unit,
                     delayedProduceLock: Option[Lock] = None,
@@ -969,6 +985,7 @@ class ReplicaManager(val config: KafkaConfig,
     initialProduceStatus: Map[TopicPartition, ProducePartitionStatus],
     responseCallback: Map[TopicPartition, PartitionResponse] => Unit,
   ): Unit = {
+    // 判断是否需要等待其他副本写入
     if (delayedProduceRequestRequired(requiredAcks, entriesPerPartition, initialAppendResults)) {
       // create delayed produce operation
       val produceMetadata = ProduceMetadata(requiredAcks, initialProduceStatus)
@@ -1371,6 +1388,10 @@ class ReplicaManager(val config: KafkaConfig,
   // 1. required acks = -1
   // 2. there is data to append
   // 3. at least one partition append was successful (fewer errors than partitions)
+  // 如果需要等待其他副本的写入，就必须同时满足 3 个条件：
+  // 1.requiredAcks 必须等于 -1；
+  // 2.依然有数据尚未写完；
+  // 3.至少有一个分区的消息已经成功地被写入到本地日志。
   private def delayedProduceRequestRequired(requiredAcks: Short,
                                             entriesPerPartition: Map[TopicPartition, MemoryRecords],
                                             localProduceResults: Map[TopicPartition, LogAppendResult]): Boolean = {
@@ -1644,6 +1665,7 @@ class ReplicaManager(val config: KafkaConfig,
    * the callback function will be triggered either when timeout or required fetch info is satisfied.
    * Consumers may fetch from any replica, but followers can only fetch from the leader.
    */
+    // 副本读取
   def fetchMessages(params: FetchParams,
                     fetchInfos: Seq[(TopicIdPartition, PartitionData)],
                     quota: ReplicaQuota,
@@ -2020,6 +2042,7 @@ class ReplicaManager(val config: KafkaConfig,
     }
   }
 
+  // 具体处理 LeaderAndIsrRequest 请求的地方
   def becomeLeaderOrFollower(correlationId: Int,
                              leaderAndIsrRequest: LeaderAndIsrRequest,
                              onLeadershipChange: (Iterable[Partition], Iterable[Partition]) => Unit): LeaderAndIsrResponse = {
@@ -2309,6 +2332,7 @@ class ReplicaManager(val config: KafkaConfig,
    *
    *  TODO: the above may need to be fixed later
    */
+  // 让 Broker 成为指定分区 Leader 副本
   private def makeLeaders(controllerId: Int,
                           controllerEpoch: Int,
                           partitionStates: Map[Partition, LeaderAndIsrPartitionState],
@@ -2391,6 +2415,7 @@ class ReplicaManager(val config: KafkaConfig,
    * the error message will be set on each partition since we do not know which partition caused it. Otherwise,
    * return the set of partitions that are made follower due to this method
    */
+  // 让 Broker 成为指定分区 Follower 副本的方法
   private def makeFollowers(controllerId: Int,
                             controllerEpoch: Int,
                             partitionStates: Map[Partition, LeaderAndIsrPartitionState],

@@ -60,9 +60,13 @@ class RemoteLeaderEndPoint(logPrefix: String,
 
   this.logIdent = logPrefix
 
+  // Follower 发送的 FETCH 请求被处理返回前的最长等待时间。它是 Broker 端参数 replica.fetch.wait.max.ms 的值
   private val maxWait = brokerConfig.replicaFetchWaitMaxMs
+  // 每个 FETCH Response 返回前必须要累积的最少字节数。它是 Broker 端参数 replica.fetch.min.bytes 的值
   private val minBytes = brokerConfig.replicaFetchMinBytes
+  // 每个合法 FETCH Response 的最大字节数。它是 Broker 端参数 replica.fetch.response.max.bytes 的值
   private val maxBytes = brokerConfig.replicaFetchResponseMaxBytes
+  // 单个分区能够获取到的最大字节数。它是 Broker 端参数 replica.fetch.max.bytes 的值
   private val fetchSize = brokerConfig.replicaFetchMaxBytes
 
   override def isTruncationOnFetchSupported: Boolean = metadataVersionSupplier().isTruncationOnFetchSupported
