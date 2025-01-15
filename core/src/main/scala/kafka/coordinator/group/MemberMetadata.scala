@@ -146,6 +146,7 @@ private[group] class MemberMetadata(var memberId: String,
    * Vote for one of the potential group protocols. This takes into account the protocol preference as
    * indicated by the order of supported protocols and returns the first one also contained in the set
    */
+    // 将 candidates 与每个成员的支持列表进行比对，找出成员支持列表中第一个包含在 candidates 中的策略
   def vote(candidates: Set[String]): String = {
     supportedProtocols.find({ case (protocol, _) => candidates.contains(protocol)}) match {
       case Some((protocol, _)) => protocol
