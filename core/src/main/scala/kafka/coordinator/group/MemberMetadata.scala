@@ -21,14 +21,17 @@ import java.util
 
 import kafka.utils.nonthreadsafe
 
-case class MemberSummary(memberId: String,
-                         groupInstanceId: Option[String],
-                         clientId: String,
-                         clientHost: String,
-                         metadata: Array[Byte],
-                         assignment: Array[Byte])
+// 组成员元数据的一个概要数据类
+case class MemberSummary(memberId: String, // 成员ID，由Kafka自动生成,规则是 consumer- 组 ID-< 序号 >-
+                         groupInstanceId: Option[String], // Consumer端参数group.instance.id值
+                         clientId: String, // client.id参数值
+                         clientHost: String, // Consumer端程序主机名,它记录了这个客户端是从哪台机器发出的消费请求
+                         metadata: Array[Byte], // 消费者组成员使用的分配策略,由消费者端参数 partition.assignment.strategy 值设定，默认的 RangeAssignor 策略是按照主题平均分配分区
+                         assignment: Array[Byte]) // 成员订阅分区
 
 private object MemberMetadata {
+  // 提取分区分配策略集合
+  // 从一组给定的分区分配策略详情中提取出分区分配策略的名称，并将其封装成一个集合对象
   def plainProtocolSet(supportedProtocols: List[(String, Array[Byte])]): Set[String] = supportedProtocols.map(_._1).toSet
 }
 
@@ -57,14 +60,25 @@ private[group] class MemberMetadata(var memberId: String,
                                     val groupInstanceId: Option[String],
                                     val clientId: String,
                                     val clientHost: String,
+                                   // Rebalance 操作的超时时间，即一次 Rebalance 操作必须在这个时间内完成，否则被视为超时。
+                                    // 这个字段的值是Consumer端参数max.poll.interval.ms的值
                                     var rebalanceTimeoutMs: Int,
+                                    // 会话超时时间
+                                   // 当前消费者组成员依靠心跳机制“保活”。如果在会话超时时间之内未能成功发送心跳，组成员就被判定成“下线”，从而触发新一轮的 Rebalance。
+                                    // 这个字段的值是 Consumer 端参数session.timeout.ms的值。
                                     var sessionTimeoutMs: Int,
+                                    // 对消费者组而言，是"consumer"
                                     val protocolType: String,
+                                    // 成员配置的多套分区分配策略
                                     var supportedProtocols: List[(String, Array[Byte])],
+                                    // 分区分配方案
                                     var assignment: Array[Byte] = Array.empty[Byte]) {
 
+  // 表示组成员是否正在等待加入组
   var awaitingJoinCallback: JoinGroupResult => Unit = _
+  // 表示组成员是否正在等待 GroupCoordinator 发送分配方案
   var awaitingSyncCallback: SyncGroupResult => Unit = _
+  // 表示是否是消费者组下的新成员
   var isNew: Boolean = false
 
   def isStaticMember: Boolean = groupInstanceId.isDefined
@@ -83,6 +97,7 @@ private[group] class MemberMetadata(var memberId: String,
    * Get metadata corresponding to the provided protocol.
    */
   def metadata(protocol: String): Array[Byte] = {
+    // 从配置的分区分配策略中寻找给定策略
     supportedProtocols.find(_._1 == protocol) match {
       case Some((_, metadata)) => metadata
       case None =>

@@ -33,7 +33,16 @@ import org.apache.kafka.coordinator.group.Group
 import scala.collection.{Seq, immutable, mutable}
 import scala.jdk.CollectionConverters._
 
+/**
+ * 定义了消费者组的状态空间。当前有 5 个状态，分别是 Empty、PreparingRebalance、CompletingRebalance、Stable 和 Dead。
+ * 其中，Empty 表示当前无成员的消费者组；
+ * PreparingRebalance 表示正在执行加入组操作的消费者组；
+ * CompletingRebalance 表示等待 Leader 成员制定分配方案的消费者组；
+ * Stable 表示已完成 Rebalance 操作可正常工作的消费者组；
+ * Dead 表示当前无成员且元数据信息被删除的消费者组。
+ */
 private[group] sealed trait GroupState {
+  // 合法前置状态
   val validPreviousStates: Set[GroupState]
   val toLowerCaseString: String = toString.toLowerCase
 }
@@ -51,6 +60,7 @@ private[group] sealed trait GroupState {
  *             all members have left the group => Empty
  *             group is removed by partition emigration => Dead
  */
+// 表示正在执行加入组操作的消费者组
 private[group] case object PreparingRebalance extends GroupState {
   val validPreviousStates: Set[GroupState] = Set(Stable, CompletingRebalance, Empty)
 }
@@ -68,6 +78,7 @@ private[group] case object PreparingRebalance extends GroupState {
  *             member failure detected => PreparingRebalance
  *             group is removed by partition emigration => Dead
  */
+// 表示等待 Leader 成员制定分配方案的消费者组
 private[group] case object CompletingRebalance extends GroupState {
   val validPreviousStates: Set[GroupState] = Set(PreparingRebalance)
 }
@@ -86,6 +97,7 @@ private[group] case object CompletingRebalance extends GroupState {
  *             follower join-group with new metadata => PreparingRebalance
  *             group is removed by partition emigration => Dead
  */
+// 表示已完成 Rebalance 操作可正常工作的消费者组
 private[group] case object Stable extends GroupState {
   val validPreviousStates: Set[GroupState] = Set(CompletingRebalance)
 }
@@ -101,6 +113,7 @@ private[group] case object Stable extends GroupState {
  *         allow offset fetch requests
  * transition: Dead is a final state before group metadata is cleaned up, so there are no transitions
  */
+// 表示当前无成员且元数据信息被删除的消费者组
 private[group] case object Dead extends GroupState {
   val validPreviousStates: Set[GroupState] = Set(Stable, PreparingRebalance, CompletingRebalance, Empty, Dead)
 }
@@ -120,6 +133,7 @@ private[group] case object Dead extends GroupState {
   *             group is removed by partition emigration => Dead
   *             group is removed by expiration => Dead
   */
+// Empty 表示当前无成员的消费者组
 private[group] case object Empty extends GroupState {
   val validPreviousStates: Set[GroupState] = Set(PreparingRebalance)
 }
@@ -156,9 +170,10 @@ private object GroupMetadata extends Logging {
 /**
  * Case class used to represent group metadata for the ListGroups API
  */
-case class GroupOverview(groupId: String,
-                         protocolType: String,
-                         state: String,
+//定义了非常简略的消费者组概览信息
+case class GroupOverview(groupId: String, // 组ID信息，即group.id参数值
+                         protocolType: String, // 消费者组的协议类型
+                         state: String, // 消费者组的状态
                          groupType: String)
 
 /**
@@ -167,7 +182,7 @@ case class GroupOverview(groupId: String,
 case class GroupSummary(state: String,
                         protocolType: String,
                         protocol: String,
-                        members: List[MemberSummary])
+                        members: List[MemberSummary])// 成员元数据
 
 /**
   * We cache offset commits along with their commit record offset. This enables us to ensure that the latest offset
@@ -175,6 +190,7 @@ case class GroupSummary(state: String,
   * information of the commit record offset, compaction of the offsets topic itself may result in the wrong offset commit
   * being materialized.
   */
+// 保存写入到位移主题中的消息的位移值，以及其他元数据信息
 case class CommitRecordMetadataAndOffset(appendedBatchOffset: Option[Long], offsetAndMetadata: OffsetAndMetadata) {
   def olderThan(that: CommitRecordMetadataAndOffset): Boolean = appendedBatchOffset.get < that.appendedBatchOffset.get
 }

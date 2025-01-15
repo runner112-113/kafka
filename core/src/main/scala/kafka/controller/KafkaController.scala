@@ -1001,6 +1001,7 @@ extends ControllerEventProcessor with Logging {
     }
   }
 
+  // 初始化Controller上的元数据缓存
   private def initializeControllerContext(): Unit = {
     // update controller cache with delete topic information
     val curBrokerAndEpochs = zkClient.getAllBrokerAndEpochsInCluster

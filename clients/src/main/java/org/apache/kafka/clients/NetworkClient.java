@@ -1162,6 +1162,7 @@ public class NetworkClient implements KafkaClient {
         public long maybeUpdate(long now) {
             // should we update our metadata?
             long timeToNextMetadataUpdate = metadata.timeToNextUpdate(now);
+            // 有在请求的MetadataRequest
             long waitForMetadataFetch = hasFetchInProgress() ? defaultRequestTimeoutMs : 0;
 
             long metadataTimeout = Math.max(timeToNextMetadataUpdate, waitForMetadataFetch);
@@ -1171,7 +1172,7 @@ public class NetworkClient implements KafkaClient {
 
             // Beware that the behavior of this method and the computation of timeouts for poll() are
             // highly dependent on the behavior of leastLoadedNode.
-            // 最小负载的node
+            // 最小负载的node(inflight请求最少的)发送METADATA请求
             LeastLoadedNode leastLoadedNode = leastLoadedNode(now);
 
             // Rebootstrap if needed and configured.
