@@ -1211,6 +1211,10 @@ private[group] class GroupCoordinator(
     }
   }
 
+  /**
+   * 处理消费者组下所有成员的心跳超时设置，并指定下一次心跳的超时时间
+   * @param group
+   */
   private def onGroupLoaded(group: GroupMetadata): Unit = {
     group.inLock {
       info(s"Loading group metadata for ${group.groupId} with generation ${group.generationId}")
