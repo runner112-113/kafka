@@ -864,7 +864,7 @@ private[group] class GroupMetadata(val groupId: String, // 组ID
             commitRecordMetadataAndOffset.offsetAndMetadata.expireTimestamp match {
               case None =>
                 // current version with no per partition retention
-                // 间隔是否>offsets.retention.minutes
+                // 间隔是否>offsets.retention.minutes(默认7天)
                 currentTimestamp - baseTimestamp(commitRecordMetadataAndOffset) >= offsetRetentionMs
               case Some(expireTimestamp) =>
                 // older versions with explicit expire_timestamp field => old expiration semantics is used
@@ -893,7 +893,7 @@ private[group] class GroupMetadata(val groupId: String, // 组ID
             .getOrElse(commitRecordMetadataAndOffset.offsetAndMetadata.commitTimestamp)
         )
 
-        // 如果是普通的消费者组类型，且订阅主题信息已知，
+      // 如果是普通的消费者组类型，且订阅主题信息已知，
       // 就传入提交位移消息本身的写入时间戳和订阅主题集合共同确定过期位移值
       case Some(ConsumerProtocol.PROTOCOL_TYPE) if subscribedTopics.isDefined && is(Stable) =>
         // consumers exist in the group and group is stable =>

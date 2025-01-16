@@ -171,7 +171,7 @@ public class GroupCoordinatorConfig {
     public static final String OFFSETS_LOAD_BUFFER_SIZE_DOC = "Batch size for reading from the offsets segments when loading offsets into the cache (soft-limit, overridden if records are too large).";
 
     public static final String OFFSETS_RETENTION_MINUTES_CONFIG = "offsets.retention.minutes";
-    public static final int OFFSETS_RETENTION_MINUTES_DEFAULT = 7 * 24 * 60;
+    public static final int OFFSETS_RETENTION_MINUTES_DEFAULT = 7 * 24 * 60; // 7天
     public static final String OFFSETS_RETENTION_MINUTES_DOC = "For subscribed consumers, committed offset of a specific partition will be expired and discarded when 1) this retention period has elapsed after the consumer group loses all its consumers (i.e. becomes empty); " +
             "2) this retention period has elapsed since the last time an offset is committed for the partition and the group is no longer subscribed to the corresponding topic. " +
             "For standalone consumers (using manual assignment), offsets will be expired after this retention period has elapsed since the time of last commit. " +
@@ -179,7 +179,7 @@ public class GroupCoordinatorConfig {
             "also when a topic is deleted via the delete-topic request, upon propagated metadata update any group's committed offsets for that topic will also be deleted without extra retention period.";
 
     public static final String OFFSETS_RETENTION_CHECK_INTERVAL_MS_CONFIG = "offsets.retention.check.interval.ms";
-    public static final long OFFSETS_RETENTION_CHECK_INTERVAL_MS_DEFAULT = 600000L;
+    public static final long OFFSETS_RETENTION_CHECK_INTERVAL_MS_DEFAULT = 600000L; // 10分钟检查一次
     public static final String OFFSETS_RETENTION_CHECK_INTERVAL_MS_DOC = "Frequency at which to check for stale offsets";
 
     public static final String OFFSETS_TOPIC_PARTITIONS_CONFIG = "offsets.topic.num.partitions";
