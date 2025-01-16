@@ -465,6 +465,10 @@ private[group] class GroupMetadata(val groupId: String, // 组ID
 
   def allMemberMetadata: List[MemberMetadata] = members.values.toList
 
+  /**
+   *
+   * @return
+   */
   def rebalanceTimeoutMs: Int = members.values.foldLeft(0) { (timeout, member) =>
     timeout.max(member.rebalanceTimeoutMs)
   }

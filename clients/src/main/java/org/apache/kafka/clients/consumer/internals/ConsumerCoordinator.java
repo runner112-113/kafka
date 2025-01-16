@@ -482,7 +482,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             }
             // Always update the heartbeat last poll time so that the heartbeat thread does not leave the
             // group proactively due to application inactivity even if (say) the coordinator cannot be found.
-            // 发送心跳
+            // 发送心跳，更新客户端的计时器：sessionTimer、heartbeatTimer、pollerTimer
             pollHeartbeat(timer.currentTimeMs());
             // 找到对应的Group Coordinator
             if (coordinatorUnknownAndUnreadySync(timer)) {

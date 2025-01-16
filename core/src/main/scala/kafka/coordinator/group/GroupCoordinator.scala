@@ -655,6 +655,7 @@ private[group] class GroupCoordinator(
     def removeCurrentMemberFromGroup(group: GroupMetadata, memberId: String, reason: Option[String]): Unit = {
       val member = group.get(memberId)
       val leaveReason = reason.getOrElse("not provided")
+      // 主动离开组
       removeMemberAndUpdateGroup(group, member, s"Removing member $memberId on LeaveGroup; client reason: $leaveReason")
       removeHeartbeatForLeavingMember(group, member.memberId)
       info(s"Member $member has left group $groupId through explicit `LeaveGroup`; client reason: $leaveReason")
@@ -1488,16 +1489,22 @@ private[group] class GroupCoordinator(
     // if a sync expiration is pending, cancel it.
     removeSyncExpiration(group)
 
-    val delayedRebalance = if (group.is(Empty))
+    val delayedRebalance = if (group.is(Empty)) {
+      // group.initial.rebalance.delay.ms
+      // 发送完JoinGroup请求后，如果当前的consumer group中没有member，coordinator会等待group.initial.rebalance.delay.ms默认3秒，再返回JoinGroup的结果。
+      // 等待一段时间是为了等待一下其他的consumer，第一个加入到group中的member会被认定为group中的leader，leader会负责进行partition的assignment分配
       new InitialDelayedJoin(this,
         rebalancePurgatory,
         group,
         groupConfig.groupInitialRebalanceDelayMs,
         groupConfig.groupInitialRebalanceDelayMs,
         max(group.rebalanceTimeoutMs - groupConfig.groupInitialRebalanceDelayMs, 0))
-    else
+    } else {
+      // rebalance设置超时
       new DelayedJoin(this, group, group.rebalanceTimeoutMs)
+    }
 
+    // 转变为PreparingRebalance状态：收集group的member信息
     group.transitionTo(PreparingRebalance)
 
     info(s"Preparing to rebalance group ${group.groupId} in state ${group.currentState} with old generation " +
@@ -1516,6 +1523,7 @@ private[group] class GroupCoordinator(
 
     group.currentState match {
       case Dead | Empty =>
+        // 分区重平衡
       case Stable | CompletingRebalance => maybePrepareRebalance(group, reason)
       case PreparingRebalance => rebalancePurgatory.checkAndComplete(GroupJoinKey(group.groupId))
     }
@@ -1733,7 +1741,7 @@ private[group] class GroupCoordinator(
         val member = group.get(memberId)
         if (!member.hasSatisfiedHeartbeat) {
           info(s"Member ${member.memberId} in group ${group.groupId} has failed, removing it from the group")
-          // 将超时消费者提出
+          // 将超时消费者踢出消费组 - heartbeat expiration
           removeMemberAndUpdateGroup(group, member, s"removing member ${member.memberId} on heartbeat expiration")
         }
       }

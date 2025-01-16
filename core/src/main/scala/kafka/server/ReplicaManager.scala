@@ -774,7 +774,7 @@ class ReplicaManager(val config: KafkaConfig,
    * @param actionQueue                   the action queue to use. ReplicaManager#defaultActionQueue is used by default.
    * @param verificationGuards            the mapping from topic partition to verification guards if transaction verification is used
    */
-  def appendRecords(timeout: Long, // 请求处理超时时间。对于生产者来说，它就是 request.timeout.ms 参数值。
+  def appendRecords(timeout: Long, // 请求处理超时时间。对于生产者来说，它就是request.timeout.ms参数值
                    // 是否需要等待其他副本写入。对于生产者而言，它就是 acks 参数的值。
                     // 而在其他场景中，Kafka 默认使用 -1，表示等待其他副本全部写入成功再返回
                     requiredAcks: Short,
