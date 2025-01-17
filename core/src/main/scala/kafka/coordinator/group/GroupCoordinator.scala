@@ -879,6 +879,7 @@ private[group] class GroupCoordinator(
               completeAndScheduleNextHeartbeatExpiration(group, member)
               Errors.NONE
 
+              // 当在PreparingRebalance状态时，返回REBALANCE_IN_PROGRESS
             case PreparingRebalance =>
                 val member = group.get(memberId)
                 completeAndScheduleNextHeartbeatExpiration(group, member)

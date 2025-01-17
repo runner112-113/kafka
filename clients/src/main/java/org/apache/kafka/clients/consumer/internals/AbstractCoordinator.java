@@ -485,6 +485,7 @@ public abstract class AbstractCoordinator implements Closeable {
             }
 
             // 创建并发送 JoinGroupRequest 请求，申请加入目标 group
+            // 以及随后发送SyncGroupRequest 同步获取分区分配结果
             final RequestFuture<ByteBuffer> future = initiateJoinGroup();
             client.poll(future, timer);
             if (!future.isDone()) {
@@ -492,7 +493,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 return false;
             }
 
-            // 执行分区分配成功
+            // 执行分区分配成功 - 拿到分区分配的结果
             if (future.succeeded()) {
                 Generation generationSnapshot;
                 MemberState stateSnapshot;
@@ -510,6 +511,7 @@ public abstract class AbstractCoordinator implements Closeable {
                     // Duplicate the buffer in case `onJoinComplete` does not complete and needs to be retried.
                     ByteBuffer memberAssignment = future.value().duplicate();
 
+                    // 分配完成后的逻辑
                     onJoinComplete(generationSnapshot.generationId, generationSnapshot.memberId, generationSnapshot.protocolName, memberAssignment);
 
                     // Generally speaking we should always resetJoinGroupFuture once the future is done, but here
@@ -681,8 +683,10 @@ public abstract class AbstractCoordinator implements Closeable {
 
                             // 判断当前Consumer Coordinator的角色
                             if (joinResponse.isLeader()) {
+                                // 执行分区分配 然后通过SyncGroupRequest将分区分配结果反馈到Broker端
                                 onLeaderElected(joinResponse).chain(future);
                             } else {
+                                // 发送SyncGroupRequest
                                 onJoinFollower().chain(future);
                             }
                         }
@@ -1270,7 +1274,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 // this case and ignore the REBALANCE_IN_PROGRESS error
                 synchronized (AbstractCoordinator.this) {
                     if (state == MemberState.STABLE) {
-                        // 重新加入Group
+                        // 重新加入Group(标记rejoinNeeded为true，下次poll的时候重新加入Group)
                         requestRejoin("group is already rebalancing");
                         future.raise(error);
                     } else {

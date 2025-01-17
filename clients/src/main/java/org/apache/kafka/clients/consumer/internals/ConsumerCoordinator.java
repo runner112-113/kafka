@@ -399,6 +399,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 // Revoke partitions that were previously owned but no longer assigned;
                 // note that we should only change the assignment (or update the assignor's state)
                 // AFTER we've triggered  the revoke callback
+                // 触发撤销的分区逻辑
                 firstException.compareAndSet(null, rebalanceListenerInvoker.invokePartitionsRevoked(revokedPartitions));
 
                 // If revoked any partitions, need to re-join the group afterwards
@@ -791,6 +792,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             if (!revokedPartitions.isEmpty()) {
                 log.info("Giving away all assigned partitions as lost since generation/memberID has been reset," +
                     "indicating that consumer is in old state or no longer part of the group");
+                // 返回当前所分配的分区
                 exception = rebalanceListenerInvoker.invokePartitionsLost(revokedPartitions);
 
                 subscriptions.assignFromSubscribed(Collections.emptySet());
