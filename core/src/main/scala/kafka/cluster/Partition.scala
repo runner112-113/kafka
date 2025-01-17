@@ -1020,6 +1020,8 @@ class Partition(val topicPartition: TopicPartition,
    *
    * This function can be triggered when a replica's LEO has incremented.
    */
+    // 将指定的副本在满足条件下加入到 ISR 集合中
+    // follower 副本的 LEO 已经追赶上 leader 副本的 HW 值
   private def maybeExpandIsr(followerReplica: Replica): Unit = {
     val needsIsrUpdate = !partitionState.isInflight && canAddReplicaToIsr(followerReplica.brokerId) && inReadLock(leaderIsrUpdateLock) {
       needsExpandIsr(followerReplica)
@@ -1247,6 +1249,7 @@ class Partition(val topicPartition: TopicPartition,
    * 收缩是指，把 ISR 副本集合中那些与 Leader 差距过大的副本移除的过程。
    * 所谓的差距过大，就是 ISR 中 Follower 副本滞后 Leader 副本的时间，超过了 Broker 端参数 replica.lag.time.max.ms 值的 1.5 倍。
    */
+    // 依据给定的时间阈值将滞后于 leader 副本超过阈值时间的 follower 副本移出 ISR 集合
   def maybeShrinkIsr(): Unit = {
     def needsIsrUpdate: Boolean = {
       !partitionState.isInflight && inReadLock(leaderIsrUpdateLock) {
@@ -1782,6 +1785,7 @@ class Partition(val topicPartition: TopicPartition,
     // reflect the updated ISR even if there is a delay before we receive the confirmation.
     // Alternatively, if the update fails, no harm is done since the expanded ISR puts
     // a stricter requirement for advancement of the HW.
+   // 将新的副本加入ISR集合
     val isrToSend = partitionState.isr + newInSyncReplicaId
     val isrWithBrokerEpoch = addBrokerEpochToIsr(isrToSend.toList).asJava
     val newLeaderAndIsr = new LeaderAndIsr(
