@@ -99,17 +99,17 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 建模时间轮类型，统一管理下辖的所有 Bucket 以及定时任务。
  */
 public class TimingWheel {
-    // 滴答一次的时长，类似于手表的例子中向前推进一格的时间。对于秒针而言，tickMs 就是 1 秒。
-    // 同理，分针是 1 分，时针是 1 小时。在 Kafka 中，第 1 层时间轮的 tickMs 被固定为 1 毫秒，也就是说，向前推进一格 Bucket 的时长是 1 毫秒
+    // 滴答一次的时长，类似于手表的例子中向前推进一格的时间。对于秒针而言，tickMs 就是1秒。
+    // 同理，分针是1分，时针是1小时。在 Kafka 中，第1层时间轮的tickMs被固定为1毫秒，也就是说，向前推进一格 Bucket 的时长是1毫秒
     private final long tickMs;
-    // 每一层时间轮上的 Bucket 数量。第 1 层的 Bucket 数量是 20
+    // 每一层时间轮上的 Bucket 数量。第1层的Bucket数量是20
     private final int wheelSize;
     // 这一层时间轮上的总定时任务数
     private final AtomicInteger taskCounter;
-    // 将所有 Bucket 按照过期时间排序的延迟队列。随着时间不断向前推进，Kafka 需要依靠这个队列获取那些已过期的 Bucket，并清除它们
+    // 将所有Bucket按照过期时间排序的延迟队列。随着时间不断向前推进，Kafka 需要依靠这个队列获取那些已过期的 Bucket，并清除它们
     private final DelayQueue<TimerTaskList> queue;
-    // 这层时间轮总时长，等于滴答时长乘以 wheelSize。以第 1 层为例，interval 就是 20 毫秒。
-    // 由于下一层时间轮的滴答时长就是上一层的总时长，因此，第 2 层的滴答时长就是 20 毫秒，总时长是 400 毫秒，以此类推
+    // 这层时间轮总时长，等于tickMs * wheelSize。以第1 层为例，interval就是20毫秒。
+    // 由于下一层时间轮的滴答时长就是上一层的总时长，因此，第2层的滴答时长就是20毫秒，总时长是400毫秒，以此类推
     private final long interval;
     // 时间轮下的所有 Bucket 对象，也就是所有 TimerTaskList 对象
     // TimerTaskList:双向链表，其中的TimerTaskEntry 与 TimerTask 是 1 对 1 的关系
@@ -159,7 +159,7 @@ public class TimingWheel {
             // 滴答时长tickMs等于下层时间轮总时长
             // 每层的轮子数都是相同的
             overflowWheel = new TimingWheel(
-                interval,
+                interval,// 下层时间轮的总时长
                 wheelSize,
                 currentTimeMs,
                 taskCounter,
@@ -214,6 +214,7 @@ public class TimingWheel {
     }
 
     /**
+     * 向前驱动时钟
      * 参数 timeMs 表示要把时钟向前推动到这个时点。向前驱动到的时点必须要超过 Bucket 的时间范围，才是有意义的推进，
      * 否则什么都不做，毕竟它还在 Bucket 时间范围内。
      * 相反，一旦超过了 Bucket 覆盖的时间范围，代码就会更新当前时间 currentTime 到下一个 Bucket 的起始时点，
