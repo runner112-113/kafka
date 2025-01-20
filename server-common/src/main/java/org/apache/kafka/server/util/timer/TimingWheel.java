@@ -94,6 +94,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * This class is not thread-safe. There should not be any add calls while advanceClock is executing.
  * It is caller's responsibility to enforce it. Simultaneous add calls are thread-safe.
  */
+
+/**
+ * 建模时间轮类型，统一管理下辖的所有 Bucket 以及定时任务。
+ */
 public class TimingWheel {
     // 滴答一次的时长，类似于手表的例子中向前推进一格的时间。对于秒针而言，tickMs 就是 1 秒。
     // 同理，分针是 1 分，时针是 1 小时。在 Kafka 中，第 1 层时间轮的 tickMs 被固定为 1 毫秒，也就是说，向前推进一格 Bucket 的时长是 1 毫秒

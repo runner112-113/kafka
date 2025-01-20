@@ -24,6 +24,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
+/**
+ * 建模时间轮 Bucket 下的延时请求双向循环链表，提供 O(1) 时间复杂度的请求插入和删除。
+ */
 class TimerTaskList implements Delayed {
     private final Time time;
     // 用于标识当前这个链表中的总定时任务数

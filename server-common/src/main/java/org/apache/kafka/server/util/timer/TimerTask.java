@@ -16,6 +16,9 @@
  */
 package org.apache.kafka.server.util.timer;
 
+/**
+ * 建模 Kafka 延时请求。它是一个 Runnable 类，Kafka 使用一个单独线程异步添加延时请求到时间轮。
+ */
 public abstract class TimerTask implements Runnable {
     // 每个TimerTask实例关联一个TimerTaskEntry
     // 就是说每个定时任务需要知道它在哪个Bucket链表下的哪个链表元素上

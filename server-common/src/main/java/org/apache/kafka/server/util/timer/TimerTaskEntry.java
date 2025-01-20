@@ -16,6 +16,9 @@
  */
 package org.apache.kafka.server.util.timer;
 
+/**
+ * 建模时间轮 Bucket 下延时请求链表的元素类型，封装了 TimerTask 对象和定时任务的过期时间戳信息。
+ */
 public class TimerTaskEntry {
     public final TimerTask timerTask;
     // 任务过期时间
