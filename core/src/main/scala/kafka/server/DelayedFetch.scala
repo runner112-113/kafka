@@ -48,9 +48,9 @@ case class FetchPartitionStatus(startOffsetMetadata: LogOffsetMetadata, fetchInf
 class DelayedFetch(
   params: FetchParams,
   fetchPartitionStatus: Seq[(TopicIdPartition, FetchPartitionStatus)],
-  replicaManager: ReplicaManager,
+  replicaManager: ReplicaManager, // 副本管理器
   quota: ReplicaQuota,
-  responseCallback: Seq[(TopicIdPartition, FetchPartitionData)] => Unit
+  responseCallback: Seq[(TopicIdPartition, FetchPartitionData)] => Unit // 响应回调函数
 ) extends DelayedOperation(params.maxWaitMs) {
 
   override def toString: String = {
@@ -74,8 +74,10 @@ class DelayedFetch(
    */
   override def tryComplete(): Boolean = {
     var accumulatedSize = 0
+    // 遍历处理当前延时任务关注的所有 topic 分区的状态信息
     fetchPartitionStatus.foreach {
       case (topicIdPartition, fetchStatus) =>
+        // 获取上次拉取消息的结束 offset
         val fetchOffset = fetchStatus.startOffsetMetadata
         val fetchLeaderEpoch = fetchStatus.fetchInfo.currentLeaderEpoch
         try {
@@ -145,6 +147,7 @@ class DelayedFetch(
     }
 
     // Case G
+    // 累计读取的字节数已经达到最小字节限制
     if (accumulatedSize >= params.minBytes)
        forceComplete()
     else

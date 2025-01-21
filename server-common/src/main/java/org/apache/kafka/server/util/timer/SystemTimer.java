@@ -31,12 +31,17 @@ public class SystemTimer implements Timer {
     public static final String SYSTEM_TIMER_THREAD_PREFIX = "executor-";
 
     // timeout timer
+    // 单线程的线程池用于异步执行定时任务
     private final ExecutorService taskExecutor;
+    // 延迟队列保存所有Bucket，即所有TimerTaskList对象
     private final DelayQueue<TimerTaskList> delayQueue;
+    // 总定时任务数
     private final AtomicInteger taskCounter;
+    // 时间轮对象
     private final TimingWheel timingWheel;
 
     // Locks used to protect data structures while ticking
+    // 维护线程安全的读写锁
     private final ReentrantReadWriteLock readWriteLock = new ReentrantReadWriteLock();
     private final ReentrantReadWriteLock.ReadLock readLock = readWriteLock.readLock();
     private final ReentrantReadWriteLock.WriteLock writeLock = readWriteLock.writeLock();
@@ -46,9 +51,12 @@ public class SystemTimer implements Timer {
     }
 
     public SystemTimer(
+            // Purgatory 的名字。Kafka 中存在不同的 Purgatory，
+            // 比如专门处理生产者延迟请求的 Produce 缓冲区、处理消费者延迟请求的 Fetch 缓冲区等。这里的 Produce 和 Fetch 就是 executorName
         String executorName,
         long tickMs,
         int wheelSize,
+            // 该 SystemTimer 定时器启动时间，单位是毫秒
         long startMs
     ) {
         this.taskExecutor = Executors.newFixedThreadPool(1,
@@ -76,6 +84,7 @@ public class SystemTimer implements Timer {
     private void addTimerTaskEntry(TimerTaskEntry timerTaskEntry) {
         if (!timingWheel.add(timerTaskEntry)) {
             // Already expired or cancelled
+            // 执行到期未取消的任务
             if (!timerTaskEntry.cancelled()) {
                 taskExecutor.submit(timerTaskEntry.timerTask);
             }
@@ -87,13 +96,17 @@ public class SystemTimer implements Timer {
      * waits up to timeoutMs before giving up.
      */
     public boolean advanceClock(long timeoutMs) throws InterruptedException {
+        // 获取delayQueue中下一个已过期的Bucket
         TimerTaskList bucket = delayQueue.poll(timeoutMs, TimeUnit.MILLISECONDS);
         if (bucket != null) {
             writeLock.lock();
             try {
                 while (bucket != null) {
+                    // 推动时间轮向前"滚动"到Bucket的过期时间点
                     timingWheel.advanceClock(bucket.getExpiration());
+                    // 将该Bucket下的所有定时任务重写回到时间轮
                     bucket.flush(this::addTimerTaskEntry);
+                    // 读取下一个Bucket对象
                     bucket = delayQueue.poll();
                 }
             } finally {

@@ -22,6 +22,7 @@ public interface Timer extends AutoCloseable {
      * (beginning from the time of submission)
      * @param timerTask the task to add
      */
+    // 将给定的定时任务插入到时间轮上，等待后续延迟执行
     void add(TimerTask timerTask);
 
     /**
@@ -30,12 +31,14 @@ public interface Timer extends AutoCloseable {
      * @param timeoutMs the time to advance in milliseconds
      * @return whether or not any tasks were executed
      */
+    // 向前推进时钟，执行已达过期时间的延迟任务
     boolean advanceClock(long timeoutMs) throws InterruptedException;
 
     /**
      * Get the number of tasks pending execution
      * @return the number of tasks
      */
+    // 获取时间轮上总的定时任务数
     int size();
 
 }

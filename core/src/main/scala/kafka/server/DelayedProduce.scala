@@ -31,6 +31,7 @@ import scala.collection._
 import scala.jdk.CollectionConverters._
 
 case class ProducePartitionStatus(requiredOffset: Long, responseStatus: PartitionResponse) {
+  // 标识是否正在等待 ISR 集合中的 follower 副本从 leader 副本同步 requiredOffset 之前的消息
   @volatile var acksPending = false
 
   override def toString: String = s"[acksPending: $acksPending, error: ${responseStatus.error.code}, " +
@@ -40,8 +41,8 @@ case class ProducePartitionStatus(requiredOffset: Long, responseStatus: Partitio
 /**
  * The produce metadata maintained by the delayed produce operation
  */
-case class ProduceMetadata(produceRequiredAcks: Short,
-                           produceStatus: Map[TopicPartition, ProducePartitionStatus]) {
+case class ProduceMetadata(produceRequiredAcks: Short,// 对应 acks 值设置
+                           produceStatus: Map[TopicPartition, ProducePartitionStatus]) { // 记录每个 topic 分区对应的消息追加状态
 
   override def toString = s"[requiredAcks: $produceRequiredAcks, partitionStatus: $produceStatus]"
 }
@@ -54,22 +55,26 @@ object DelayedProduce {
  * A delayed produce operation that can be created by the replica manager and watched
  * in the produce operation purgatory
  */
-class DelayedProduce(delayMs: Long,
-                     produceMetadata: ProduceMetadata,
-                     replicaManager: ReplicaManager,
-                     responseCallback: Map[TopicPartition, PartitionResponse] => Unit,
+class DelayedProduce(delayMs: Long,// 延迟时长
+                     produceMetadata: ProduceMetadata,// 用于判断 DelayedProduce 是否满足执行条件
+                     replicaManager: ReplicaManager,// 副本管理器
+                     responseCallback: Map[TopicPartition, PartitionResponse] => Unit,// 回调函数，在任务满足条件或到期时执行
                      lockOpt: Option[Lock] = None)
   extends DelayedOperation(delayMs, lockOpt) {
 
   override lazy val logger: Logger = DelayedProduce.logger
 
   // first update the acks pending variable according to the error code
+  // 依据消息写入 leader 分区操作的错误码对 produceMetadata 的 produceStatus 进行初始化
   produceMetadata.produceStatus.foreachEntry { (topicPartition, status) =>
     if (status.responseStatus.error == Errors.NONE) {
       // Timeout error state will be cleared when required acks are received
+      // 对应 topic 分区消息写入 leader 副本成功，等待其它副本同步
       status.acksPending = true
+      // 默认错误码
       status.responseStatus.error = Errors.REQUEST_TIMED_OUT
     } else {
+      // 对应 topic 分区消息写入 leader 副本失败，无需等待
       status.acksPending = false
     }
 
@@ -81,17 +86,19 @@ class DelayedProduce(delayMs: Long,
    * it produces to is satisfied by one of the following:
    *
    * Case A: Replica not assigned to partition
-   * Case B: Replica is no longer the leader of this partition
+   * Case B: Replica is no longer the leader of this partition 对应 topic 分区的 leader 副本不再位于当前 broker 节点上
    * Case C: This broker is the leader:
    *   C.1 - If there was a local error thrown while checking if at least requiredAcks
-   *         replicas have caught up to this operation: set an error in response
-   *   C.2 - Otherwise, set the response with no error.
+   *         replicas have caught up to this operation: set an error in response 检查 ISR 集合中的所有 follower 副本是否完成同步时出现异常
+   *   C.2 - Otherwise, set the response with no error. ISR 集合中所有的 follower 副本完成了同步操作
    */
   override def tryComplete(): Boolean = {
     // check for each partition if it still has pending acks
+    // 遍历处理所有的 topic 分区
     produceMetadata.produceStatus.foreachEntry { (topicPartition, status) =>
       trace(s"Checking produce satisfaction for $topicPartition, current status $status")
       // skip those partitions that have already been satisfied
+      // 仅处理正在等待 follower 副本复制的分区
       if (status.acksPending) {
         val (hasEnough, error) = replicaManager.getPartitionOrError(topicPartition) match {
           case Left(err) =>
@@ -99,6 +106,7 @@ class DelayedProduce(delayMs: Long,
             (false, err)
 
           case Right(partition) =>
+            // 检测对应分区本次追加的最后一条消息是否已经被 ISR 集合中所有的 follower 副本同步
             partition.checkEnoughReplicasReachOffset(status.requiredOffset)
         }
 
@@ -111,6 +119,7 @@ class DelayedProduce(delayMs: Long,
     }
 
     // check if every partition has satisfied at least one of case A, B or C
+    // 如果所有的 topic 分区都已经满足了 DelayedProduce 的执行条件，即不存在等待 ack 的分区，则结束本次延时任务
     if (!produceMetadata.produceStatus.values.exists(_.acksPending))
       forceComplete()
     else
