@@ -792,6 +792,7 @@ class ReplicaManager(val config: KafkaConfig,
                     requestLocal: RequestLocal = RequestLocal.noCaching,
                     actionQueue: ActionQueue = this.defaultActionQueue,
                     verificationGuards: Map[TopicPartition, VerificationGuard] = Map.empty): Unit = {
+    // 校验acks的设置：只能是-1,1,0
     if (!isValidRequiredAcks(requiredAcks)) {
       sendInvalidRequiredAcksResponse(entriesPerPartition, responseCallback)
       return

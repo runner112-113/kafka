@@ -256,8 +256,10 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
     // if it cannot be completed by now and hence is watched, add to the expire queue also
       // 如果依然不能完成此请求，将其加入到过期队列,用于从时间维度触发延时任务执行
     if (!operation.isCompleted) {
-      if (timerEnabled)
+      if (timerEnabled) {
+        // 加入时间轮（时间维度）
         timeoutTimer.add(operation)
+      }
       if (operation.isCompleted) {
         // cancel the timer task
         operation.cancel()

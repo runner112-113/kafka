@@ -101,10 +101,12 @@ class DelayedProduce(delayMs: Long,// 延迟时长
       // 仅处理正在等待 follower 副本复制的分区
       if (status.acksPending) {
         val (hasEnough, error) = replicaManager.getPartitionOrError(topicPartition) match {
+          // 错误
           case Left(err) =>
             // Case A
             (false, err)
 
+            // 成功
           case Right(partition) =>
             // 检测对应分区本次追加的最后一条消息是否已经被 ISR 集合中所有的 follower 副本同步
             partition.checkEnoughReplicasReachOffset(status.requiredOffset)
