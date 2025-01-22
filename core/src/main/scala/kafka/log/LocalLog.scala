@@ -55,10 +55,11 @@ import scala.jdk.CollectionConverters._
  * @param topicPartition The topic partition associated with this log
  * @param logDirFailureChannel The LogDirFailureChannel instance to asynchronously handle Log dir failure
  */
-class LocalLog(@volatile private var _dir: File,
+class LocalLog(@volatile private var _dir: File,// 这个日志所在的文件夹路径，也就是主题分区的路径
                @volatile private[log] var config: LogConfig,
-               private[log] val segments: LogSegments,
+               private[log] val segments: LogSegments,// 分区日志下所有的日志段信息
                @volatile private[log] var recoveryPoint: Long,
+              // 封装了下一条待插入消息的位移值，你基本上可以把这个属性和 LEO 等同起来
                @volatile private var nextOffsetMetadata: LogOffsetMetadata,
                private[log] val scheduler: Scheduler,
                private[log] val time: Time,
@@ -567,6 +568,7 @@ object LocalLog extends Logging {
   private[log] val DeleteDirSuffix = LogFileUtils.DELETE_DIR_SUFFIX
 
   /** a directory that is used for future partition */
+    // 用于变更主题分区文件夹地址的
   private[log] val FutureDirSuffix = "-future"
 
   /** a directory that is used for stray partition */

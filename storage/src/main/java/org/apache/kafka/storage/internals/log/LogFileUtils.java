@@ -24,11 +24,14 @@ public final class LogFileUtils {
     /**
      * Suffix of a producer snapshot file
      */
+    // 为幂等型或事务型 Producer 所做的快照文件
     public static final String PRODUCER_SNAPSHOT_FILE_SUFFIX = ".snapshot";
 
     /**
      * Suffix for a file that is scheduled to be deleted
      */
+    // 删除日志段操作创建的文件。目前删除日志段文件是异步操作，Broker 端把日志段文件从.log 后缀修改为.deleted 后缀。
+    // 如果你看到一大堆.deleted 后缀的文件名，别慌，这是 Kafka 在执行日志段文件删除
     public static final String DELETED_FILE_SUFFIX = ".deleted";
 
     /**
@@ -58,6 +61,7 @@ public final class LogFileUtils {
     public static final String SWAP_FILE_SUFFIX = ".swap";
 
     /** Suffix of a directory that is scheduled to be deleted */
+    // 应用于文件夹的。当你删除一个主题的时候，主题的分区文件夹会被加上这个后缀
     public static final String DELETE_DIR_SUFFIX = "-delete";
 
     private LogFileUtils() {
@@ -94,6 +98,7 @@ public final class LogFileUtils {
      * @return The filename
      *
      * 通过给定的位移值计算出对应的日志段文件名
+     * Kafka日志文件固定是20位的长度，filenamePrefixFromOffset方法就是用前面补0的方式，把给定位移值扩充成一个固定20位长度的字符串
      */
     public static String filenamePrefixFromOffset(long offset) {
         NumberFormat nf = NumberFormat.getInstance();

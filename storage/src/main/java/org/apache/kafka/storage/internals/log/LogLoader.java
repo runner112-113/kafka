@@ -128,6 +128,7 @@ public class LogLoader {
     public LoadedLogOffsets load() throws IOException {
         // First pass: through the files in the log directory and remove any temporary files
         // and find any interrupted swap operations
+        // 移除上次 Failure 遗留下来的各种临时文件（包括.cleaned、.swap、.deleted 文件等）
         Set<File> swapFiles = removeTempFilesAndCollectSwapFiles();
 
         // The remaining valid swap files must come from compaction or segment split operation. We can
@@ -137,11 +138,14 @@ public class LogLoader {
         // We store segments that require renaming in this code block, and do the actual renaming later.
         long minSwapFileOffset = Long.MAX_VALUE;
         long maxSwapFileOffset = Long.MIN_VALUE;
+        // 遍历所有有效.swap文件
         for (File swapFile : swapFiles) {
             if (!LogFileUtils.isLogFile(new File(Utils.replaceSuffix(swapFile.getPath(), LogFileUtils.SWAP_FILE_SUFFIX, "")))) {
                 continue;
             }
+            // 拿到日志文件的起始位移值
             long baseOffset = LogFileUtils.offsetFromFile(swapFile);
+            // 创建对应的LogSegment实例
             LogSegment segment = LogSegment.open(swapFile.getParentFile(),
                     baseOffset,
                     config,
@@ -205,6 +209,7 @@ public class LogLoader {
 
         RecoveryOffsets recoveryOffsets;
         if (!dir.getAbsolutePath().endsWith(LogFileUtils.DELETE_DIR_SUFFIX)) {
+            // recoverLog
             recoveryOffsets = retryOnOffsetOverflow(this::recoverLog);
             // reset the index size of the currently active log segment to allow more entries
             segments.lastSegment().get().resizeIndexes(config.maxIndexSize);
@@ -264,10 +269,12 @@ public class LogLoader {
 
         File[] files = dir.listFiles();
         if (files == null) files = new File[0];
+        // 遍历分区日志路径下的所有文件
         for (File file : files) {
             if (!file.isFile()) {
                 continue;
             }
+            // 如果不可读，直接抛出IOException
             if (!file.canRead()) {
                 throw new IOException("Could not read file " + file);
             }
@@ -275,12 +282,17 @@ public class LogLoader {
 
             // Delete stray files marked for deletion, but skip KRaft snapshots.
             // These are handled in the recovery logic in `KafkaMetadataLog`.
+            // 如果以.deleted结尾 且 不是以.checkpoint.deleted结尾
             if (filename.endsWith(LogFileUtils.DELETED_FILE_SUFFIX) && !filename.endsWith(SNAPSHOT_DELETE_SUFFIX)) {
+                // 说明是上次Failure遗留下来的文件，直接删除
                 logger.debug("Deleting stray temporary file {}", file.getAbsolutePath());
                 Files.deleteIfExists(file.toPath());
+                // 如果以.cleaned结尾
             } else if (filename.endsWith(LogFileUtils.CLEANED_FILE_SUFFIX)) {
+                // 选取文件名中位移值最小的.cleaned文件，获取其位移值，并将该文件加入待删除文件集合中
                 minCleanedFileOffset = Math.min(LogFileUtils.offsetFromFile(file), minCleanedFileOffset);
                 cleanedFiles.add(file);
+                // 如果以.swap结尾
             } else if (filename.endsWith(LogFileUtils.SWAP_FILE_SUFFIX)) {
                 swapFiles.add(file);
             }
@@ -291,6 +303,7 @@ public class LogLoader {
         // for more details about the split operation.
         Set<File> invalidSwapFiles = new HashSet<>();
         Set<File> validSwapFiles = new HashSet<>();
+        // 从待恢复swap集合中找出那些起始位移值大于minCleanedFileOffset值的文件，直接删掉这些无效的.swap文件
         for (File file : swapFiles) {
             if (LogFileUtils.offsetFromFile(file) >= minCleanedFileOffset) {
                 invalidSwapFiles.add(file);
@@ -304,11 +317,13 @@ public class LogLoader {
         }
 
         // Now that we have deleted all .swap files that constitute an incomplete split operation, let's delete all .clean files
+        // 清除所有待删除文件集合中的文件
         for (File file : cleanedFiles) {
             logger.debug("Deleting stray .clean file {}", file.getAbsolutePath());
             Files.deleteIfExists(file.toPath());
         }
 
+        // 最后返回当前有效的.swap文件集合
         return validSwapFiles;
     }
 
@@ -358,20 +373,25 @@ public class LogLoader {
         // segments that come before it
         File[] files = dir.listFiles();
         if (files == null) files = new File[0];
+        // 按照日志段文件名中的位移值正序排列，然后遍历每个文件
         List<File> sortedFiles = Arrays.stream(files).filter(File::isFile).sorted().collect(Collectors.toList());
         for (File file : sortedFiles) {
+            // 如果是索引文件
             if (LogFileUtils.isIndexFile(file)) {
                 // if it is an index file, make sure it has a corresponding .log file
                 long offset = LogFileUtils.offsetFromFile(file);
                 File logFile = LogFileUtils.logFile(dir, offset);
+                // 确保存在对应的日志文件，否则记录一个警告，并删除该索引文件
                 if (!logFile.exists()) {
                     logger.warn("Found an orphaned index file {}, with no corresponding log file.", file.getAbsolutePath());
                     Files.deleteIfExists(file.toPath());
                 }
+                // 如果是日志文件
             } else if (LogFileUtils.isLogFile(file)) {
                 // if it's a log file, load the corresponding log segment
                 long baseOffset = LogFileUtils.offsetFromFile(file);
                 boolean timeIndexFileNewlyCreated = !LogFileUtils.timeIndexFile(dir, baseOffset).exists();
+                // 创建对应的LogSegment对象实例，并加入segments中
                 LogSegment segment = LogSegment.open(dir, baseOffset, config, time, true, 0, false, "");
                 try {
                     segment.sanityCheck(timeIndexFileNewlyCreated);
@@ -463,7 +483,9 @@ public class LogLoader {
      */
     RecoveryOffsets recoverLog() throws IOException {
         // If we have the clean shutdown marker, skip recovery.
+        // 如果不存在以.kafka_cleanshutdown结尾的文件。通常都不存在
         if (!hadCleanShutdown) {
+            // 获取到上次恢复点以外的所有unflushed日志段对象
             Collection<LogSegment> unflushed = segments.values(recoveryPointCheckpoint, Long.MAX_VALUE);
             int numUnflushed = unflushed.size();
             Iterator<LogSegment> unflushedIter = unflushed.iterator();
@@ -472,17 +494,20 @@ public class LogLoader {
             String threadName = Thread.currentThread().getName();
             numRemainingSegments.put(threadName, numUnflushed);
 
+            // 遍历这些unflushed日志段
             while (unflushedIter.hasNext() && !truncated) {
                 LogSegment segment = unflushedIter.next();
                 logger.info("Recovering unflushed segment {}. {} recovered for {}.", segment.baseOffset(), numFlushed / numUnflushed, topicPartition);
                 int truncatedBytes;
                 try {
+                    // 执行恢复日志段操作
                     truncatedBytes = recoverSegment(segment);
                 } catch (InvalidOffsetException | IOException ioe) {
                     long startOffset = segment.baseOffset();
                     logger.warn("Found invalid offset during recovery. Deleting the corrupt segment and creating an empty one with starting offset {}", startOffset);
                     truncatedBytes = segment.truncateTo(startOffset);
                 }
+                // 如果有无效的消息导致被截断的字节数不为0，直接删除剩余的日志段对象
                 if (truncatedBytes > 0) {
                     // we had an invalid message, delete all remaining log
                     logger.warn("Corruption found in segment {}, truncating to offset {}", segment.baseOffset(), segment.readNextOffset());
@@ -500,8 +525,10 @@ public class LogLoader {
         }
 
         Optional<Long> logEndOffsetOptional = deleteSegmentsIfLogStartGreaterThanLogEnd();
+        // 这些都做完之后，如果日志段集合为空了
         if (segments.isEmpty()) {
             // no existing segments, create a new mutable segment beginning at logStartOffset
+            // 至少创建一个新的日志段，以logStartOffset为日志段的起始位移，并加入日志段集合中
             segments.add(LogSegment.open(dir, logStartOffsetCheckpoint, config, time, config.initFileSize(), config.preallocate));
         }
 
@@ -511,6 +538,7 @@ public class LogLoader {
         // the recovery point when the log is flushed. If we advanced the recovery point here, we could
         // skip recovery for unflushed segments if the broker crashed after we checkpoint the recovery
         // point and before we flush the segment.
+        // 更新上次恢复点属性，并返回
         if (hadCleanShutdown && logEndOffsetOptional.isPresent()) {
             return new RecoveryOffsets(logEndOffsetOptional.get(), logEndOffsetOptional.get());
         } else {

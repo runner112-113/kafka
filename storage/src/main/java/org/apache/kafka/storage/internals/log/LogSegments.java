@@ -40,7 +40,7 @@ public class LogSegments implements Closeable {
     private final TopicPartition topicPartition;
     /* the segments of the log with key being LogSegment base offset and value being a LogSegment */
     // Log 类采用跳跃表（SkipList）数据结构对这些 LogSegment 对象进行管理
-    private final ConcurrentNavigableMap<Long, LogSegment> segments = new ConcurrentSkipListMap<>();
+    private final ConcurrentNavigableMap<Long/*日志段的起始位移值*/, LogSegment/*日志段*/> segments = new ConcurrentSkipListMap<>();
 
     /**
      * Create new instance.

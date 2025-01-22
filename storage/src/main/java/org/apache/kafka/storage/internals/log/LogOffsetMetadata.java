@@ -32,8 +32,15 @@ public final class LogOffsetMetadata {
 
     public static final LogOffsetMetadata UNKNOWN_OFFSET_METADATA = new LogOffsetMetadata(-1L, UNIFIED_LOG_UNKNOWN_OFFSET, UNKNOWN_FILE_POSITION);
 
+    // 消息位移值 即高水位值
     public final long messageOffset;
+    // 保存该位移值所在日志段的起始位移。
+    // 日志段起始位移值辅助计算两条消息在物理磁盘文件中位置的差值，即两条消息彼此隔了多少字节。
+    // 这个计算有个前提条件，即两条消息必须处在同一个日志段对象上，不能跨日志段对象。否则它们就位于不同的物理文件
     public final long segmentBaseOffset;
+    // 保存该位移值所在日志段的物理磁盘位置。
+    // 这个字段在计算两个位移值之间的物理磁盘位置差值时非常有用。你可以想一想，Kafka 什么时候需要计算位置之间的字节数呢？
+    // 答案就是在读取日志的时候。假设每次读取时只能读 1MB 的数据，那么，源码肯定需要关心两个位移之间所有消息的总字节数是否超过了 1MB
     public final int relativePositionInSegment;
 
     public LogOffsetMetadata(long messageOffset) {
@@ -56,6 +63,7 @@ public final class LogOffsetMetadata {
     }
 
     // check if this offset is on the same segment with the given offset
+    // 判断给定的两个 LogOffsetMetadata 对象是否处于同一个日志段
     public boolean onSameSegment(LogOffsetMetadata that) {
         if (messageOffsetOnly() || that.messageOffsetOnly())
             return false;

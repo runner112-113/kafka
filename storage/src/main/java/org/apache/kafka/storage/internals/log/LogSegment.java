@@ -137,6 +137,7 @@ public class LogSegment implements Closeable {
         this.lazyOffsetIndex = lazyOffsetIndex;
         this.lazyTimeIndex = lazyTimeIndex;
         this.txnIndex = txnIndex;
+        //
         this.baseOffset = baseOffset;
         this.indexIntervalBytes = indexIntervalBytes;
         this.rollJitterMs = rollJitterMs;
@@ -271,7 +272,7 @@ public class LogSegment implements Closeable {
 
             // append the messages
             // 将消息数据追加到 log 文件
-            // 将内存中的消息对象写入到操作系统的页缓存
+            // 将内存中的消息对象写入到操作系统的页缓存 PageCache
             long appendedBytes = log.append(records);
             LOGGER.trace("Appended {} to {} at end offset {}", appendedBytes, log.file(), largestOffset);
             // Update the in memory max timestamp and corresponding offset.
@@ -463,7 +464,7 @@ public class LogSegment implements Closeable {
             throw new IllegalArgumentException("Invalid max size " + maxSize + " for log read from segment " + log);
 
         // 获取小于等于 startOffset 的最大 offset 对应的物理地址 position
-        // 该方法基于 二分查找算法 从 index 文件中获取小于等于 startOffset 的最大 offset 对应的物理地址。
+        // 该方法基于 二分查找算法 从 index 文件中获取小于等于 startOffset 的最大 offset 对应的物理地址
         LogOffsetPosition startOffsetAndSize = translateOffset(startOffset);
 
         // if the start position is already off the end of the log, return null
@@ -477,6 +478,7 @@ public class LogSegment implements Closeable {
 
         // 更新读取消息的最大字节数
         int adjustedMaxSize = maxSize;
+        // 至少返回一条消息的话，就取maxSize的值和起始的第一条日志的max值
         if (minOneMessage)
             adjustedMaxSize = Math.max(maxSize, startOffsetAndSize.size);
 

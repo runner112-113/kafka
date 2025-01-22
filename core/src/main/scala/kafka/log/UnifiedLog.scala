@@ -99,10 +99,11 @@ import scala.jdk.CollectionConverters._
  * @param remoteStorageSystemEnable flag to indicate whether the system level remote log storage is enabled or not.
  */
 @threadsafe
-class UnifiedLog(@volatile var logStartOffset: Long,
-                 private val localLog: LocalLog,
+class UnifiedLog(@volatile var logStartOffset: Long, // 日志的当前最早位移
+                 private val localLog: LocalLog, // 主题分区目录的详情
                  val brokerTopicStats: BrokerTopicStats,
                  val producerIdExpirationCheckIntervalMs: Int,
+                // 保存了分区 Leader 的 Epoch 值与对应位移值的映射关系
                  @volatile var leaderEpochCache: Option[LeaderEpochFileCache],
                  val producerStateManager: ProducerStateManager,
                  @volatile private var _topicId: Option[Uuid],
@@ -139,6 +140,7 @@ class UnifiedLog(@volatile var logStartOffset: Long,
    * equals the log end offset (which may never happen for a partition under consistent load). This is needed to
    * prevent the log start offset (which is exposed in fetch responses) from getting ahead of the high watermark.
    */
+  // 分区日志高水位值 初始值是 logStartOffset
   @volatile private var highWatermarkMetadata: LogOffsetMetadata = new LogOffsetMetadata(logStartOffset)
 
   @volatile var partitionMetadataFile: Option[PartitionMetadataFile] = None
@@ -285,8 +287,11 @@ class UnifiedLog(@volatile var logStartOffset: Long,
    * @param highWatermarkMetadata the suggested high watermark with offset metadata
    * @return the updated high watermark offset
    */
+  // updateHighWatermark 方法，主要用在 Follower 副本从 Leader 副本获取到消息后更新高水位值。
+  // 一旦拿到新的消息，就必须要更新高水位值
   def updateHighWatermark(highWatermarkMetadata: LogOffsetMetadata): Long = {
     val endOffsetMetadata = localLog.logEndOffsetMetadata
+    // 新高水位值一定介于[Log Start Offset，Log End Offset]之间
     val newHighWatermarkMetadata = if (highWatermarkMetadata.messageOffset < logStartOffset) {
       new LogOffsetMetadata(logStartOffset)
     } else if (highWatermarkMetadata.messageOffset >= endOffsetMetadata.messageOffset) {
@@ -294,7 +299,7 @@ class UnifiedLog(@volatile var logStartOffset: Long,
     } else {
       highWatermarkMetadata
     }
-
+    // 调用Setter方法来更新高水位值
     updateHighWatermarkMetadata(newHighWatermarkMetadata)
     newHighWatermarkMetadata.messageOffset
   }
@@ -308,19 +313,26 @@ class UnifiedLog(@volatile var logStartOffset: Long,
    *
    * @return the old high watermark, if updated by the new value
    */
+    // maybeIncrementHighWatermark 方法，主要是用来更新 Leader 副本的高水位值。
+    // 需要注意的是，Leader 副本高水位值的更新是有条件的——某些情况下会更新高水位值，某些情况下可能不会
   def maybeIncrementHighWatermark(newHighWatermark: LogOffsetMetadata): Option[LogOffsetMetadata] = {
+    // 新高水位值不能越过Log End Offset
     if (newHighWatermark.messageOffset > logEndOffset)
       throw new IllegalArgumentException(s"High watermark $newHighWatermark update exceeds current " +
         s"log end offset ${localLog.logEndOffsetMetadata}")
 
     lock.synchronized {
+      // 获取老的高水位值
       val oldHighWatermark = fetchHighWatermarkMetadata
 
       // Ensure that the high watermark increases monotonically. We also update the high watermark when the new
       // offset metadata is on a newer segment, which occurs whenever the log is rolled to a new segment.
+      // 新高水位值要比老高水位值大以维持单调增加特性，否则就不做更新！
+      // 另外，如果新高水位值在新日志段上，也可执行更新高水位操作
       if (oldHighWatermark.messageOffset < newHighWatermark.messageOffset ||
         (oldHighWatermark.messageOffset == newHighWatermark.messageOffset && oldHighWatermark.onOlderSegment(newHighWatermark))) {
         updateHighWatermarkMetadata(newHighWatermark)
+        // 返回老的高水位值
         Some(oldHighWatermark)
       } else {
         None
@@ -354,32 +366,42 @@ class UnifiedLog(@volatile var logStartOffset: Long,
    * known, this will do a lookup in the index and cache the result.
    */
   private def fetchHighWatermarkMetadata: LogOffsetMetadata = {
+    // 读取时确保日志不能被关闭
     localLog.checkIfMemoryMappedBufferClosed()
 
+    // 保存当前高水位值到本地变量，避免多线程访问干扰
     val offsetMetadata = highWatermarkMetadata
+    //没有获得到完整的高水位元数据
     if (offsetMetadata.messageOffsetOnly) {
       lock.synchronized {
+        // 通过读日志文件的方式把完整的高水位元数据信息拉出来
         val fullOffset = maybeConvertToOffsetMetadata(highWatermark)
         updateHighWatermarkMetadata(fullOffset)
         fullOffset
       }
     } else {
+      // 否则，直接返回即可
       offsetMetadata
     }
   }
 
   private def updateHighWatermarkMetadata(newHighWatermark: LogOffsetMetadata): Unit = {
+     // 高水位值不能是负数
     if (newHighWatermark.messageOffset < 0)
       throw new IllegalArgumentException("High watermark offset should be non-negative")
 
+    // 保护Log对象修改的Monitor锁
     lock synchronized {
       if (newHighWatermark.messageOffset < highWatermarkMetadata.messageOffset) {
         warn(s"Non-monotonic update of high watermark from $highWatermarkMetadata to $newHighWatermark")
       }
 
+      // 赋值新的高水位值
       highWatermarkMetadata = newHighWatermark
+      // 处理事务状态管理器的高水位值更新逻辑
       producerStateManager.onHighWatermarkUpdated(newHighWatermark.messageOffset)
       logOffsetsListener.onHighWatermarkUpdated(newHighWatermark.messageOffset)
+      // First Unstable Offset是Kafka事务机制的一部分
       maybeIncrementFirstUnstableOffset()
     }
     trace(s"Setting high watermark $newHighWatermark")
@@ -1457,10 +1479,12 @@ class UnifiedLog(@volatile var logStartOffset: Long,
   private def deleteOldSegments(predicate: (LogSegment, Option[LogSegment]) => Boolean,
                                 reason: SegmentDeletionReason): Int = {
     lock synchronized {
+      // 使用传入的函数计算哪些日志段对象能够被删除
       val deletable = deletableSegments(predicate)
-      if (deletable.nonEmpty)
+      if (deletable.nonEmpty) {
+        // 调用 deleteSegments 方法删除这些日志段
         deleteSegments(deletable, reason)
-      else
+      } else
         0
     }
   }
@@ -1989,6 +2013,7 @@ object UnifiedLog extends Logging {
 
   val StrayDirSuffix: String = LocalLog.StrayDirSuffix
 
+  // 用于变更主题分区文件夹地址的
   val FutureDirSuffix: String = LocalLog.FutureDirSuffix
 
   private[log] val DeleteDirPattern = LocalLog.DeleteDirPattern
@@ -2025,12 +2050,14 @@ object UnifiedLog extends Logging {
             remoteStorageSystemEnable: Boolean = false,
             logOffsetsListener: LogOffsetsListener = LogOffsetsListener.NO_OP_OFFSETS_LISTENER): UnifiedLog = {
     // create the log directory if it doesn't exist
+    // 创建分区日志路径
     Files.createDirectories(dir.toPath)
     val topicPartition = UnifiedLog.parseTopicPartitionName(dir)
     val segments = new LogSegments(topicPartition)
     // The created leaderEpochCache will be truncated by LogLoader if necessary
     // so it is guaranteed that the epoch entries will be correct even when on-disk
     // checkpoint was stale (due to async nature of LeaderEpochFileCache#truncateFromStart/End).
+    // 初始化LeaderEpoch Cache
     val leaderEpochCache = UnifiedLog.maybeCreateLeaderEpochCache(
       dir,
       topicPartition,
@@ -2042,6 +2069,7 @@ object UnifiedLog extends Logging {
     val producerStateManager = new ProducerStateManager(topicPartition, dir,
       maxTransactionTimeoutMs, producerStateManagerConfig, time)
     val isRemoteLogEnabled = UnifiedLog.isRemoteLogEnabled(remoteStorageSystemEnable, config, topicPartition.topic)
+    // 加载所有日志段对象
     val offsets = new LogLoader(
       dir,
       topicPartition,
@@ -2110,6 +2138,7 @@ object UnifiedLog extends Logging {
                                   logPrefix: String,
                                   currentCache: Option[LeaderEpochFileCache],
                                   scheduler: Scheduler): Option[LeaderEpochFileCache] = {
+    // 创建Leader Epoch检查点文件
     val leaderEpochFile = LeaderEpochCheckpointFile.newFile(dir)
 
     if (recordVersion.precedes(RecordVersion.V2)) {
@@ -2119,6 +2148,7 @@ object UnifiedLog extends Logging {
       Files.deleteIfExists(leaderEpochFile.toPath)
       None
     } else {
+      // 生成Leader Epoch Cache对象
       val checkpointFile = new LeaderEpochCheckpointFile(leaderEpochFile, logDirFailureChannel)
       currentCache.map(_.withCheckpoint(checkpointFile))
         .orElse(Some(new LeaderEpochFileCache(topicPartition, checkpointFile, scheduler)))

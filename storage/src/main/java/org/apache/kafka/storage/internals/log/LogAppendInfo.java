@@ -27,6 +27,7 @@ import java.util.OptionalInt;
 
 /**
  * Struct to hold various quantities we compute about each message set before appending to the log.
+ * 保存了一组待写入消息的各种元数据信息
  */
 public class LogAppendInfo {
 

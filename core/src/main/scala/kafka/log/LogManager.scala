@@ -63,7 +63,7 @@ import scala.annotation.nowarn
  * A background thread handles log retention by periodically truncating excess log segments.
  */
 @threadsafe
-class LogManager(logDirs: Seq[File],
+class LogManager(logDirs: Seq[File], // dir 就是这个日志所在的文件夹路径，也就是主题分区的路径
                  initialOfflineDirs: Seq[File],
                  configRepository: ConfigRepository,
                  val initialDefaultConfig: LogConfig,
