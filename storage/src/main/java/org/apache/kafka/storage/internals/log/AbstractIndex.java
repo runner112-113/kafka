@@ -74,7 +74,6 @@ public abstract class AbstractIndex implements Closeable {
      */
     private volatile int maxEntries;
     /** The number of entries in this index */
-    // 表示不同索引项的大小
     private volatile int entries;
 
 
@@ -150,6 +149,7 @@ public abstract class AbstractIndex implements Closeable {
      */
     protected abstract void truncate();
 
+    // 表示不同索引项的大小
     protected abstract int entrySize();
 
 
@@ -514,7 +514,7 @@ public abstract class AbstractIndex implements Closeable {
         if (entries == 0)
             return -1;
 
-        // 第3步：确认热区首个索引项位于哪个槽。_warmEntries就是所谓的分割线，目前固定为8192字节处 、
+        // 第3步：确认热区首个索引项位于哪个槽。_warmEntries就是所谓的分割线，目前固定为8192字节处（即索引日文件的最后8kb是热区）
         // 如果是OffsetIndex，_warmEntries = 8192 / 8 = 1024，即第1024个槽
         // 如果是TimeIndex，_warmEntries = 8192 / 12 = 682，即第682个槽
         int firstHotEntry = Math.max(0, entries - 1 - warmEntries());
