@@ -60,8 +60,10 @@ import java.util.Optional;
  * 这样的设计将原本 long 类型（8 字节）的消息 offset 转换成 int 类型（4 字节）的相对 offset 进行存储，能够减少空间占用。
  * 此外，Kafka 在构造 index 文件（包括下面要介绍的 timeindex 文件）时并不会针对每个 offset 都建立对应的索引项，而是采用隔一段区间打一个点的稀疏索引机制，以进一步减少对磁盘空间的消耗。
  */
+// 定义位移索引，保存“< 相对位移值，文件磁盘物理位置 >”对
 public class OffsetIndex extends AbstractIndex {
     private static final Logger log = LoggerFactory.getLogger(OffsetIndex.class);
+    // 4+4
     private static final int ENTRY_SIZE = 8;
 
     /* the last offset in the index */
@@ -106,8 +108,12 @@ public class OffsetIndex extends AbstractIndex {
      */
     public OffsetPosition lookup(long targetOffset) {
         return maybeLock(lock, () -> {
+            // 使用私有变量复制出整个索引映射区
             ByteBuffer idx = mmap().duplicate();
+            // largestLowerBoundSlotFor方法底层使用了改进版的二分查找算法寻找对应的槽
             int slot = largestLowerBoundSlotFor(idx, targetOffset, IndexSearchType.KEY);
+            // 如果没找到，返回一个空的位置，即物理文件位置从0开始，表示从头读日志文件
+            // 否则返回slot槽对应的索引项
             if (slot == -1)
                 return new OffsetPosition(baseOffset(), 0);
             else
@@ -153,9 +159,13 @@ public class OffsetIndex extends AbstractIndex {
     public void append(long offset, int position) {
         lock.lock();
         try {
+            // 第1步：判断索引文件未写满
             if (isFull())
                 throw new IllegalArgumentException("Attempt to append to a full index (size = " + entries() + ").");
 
+            // 第2步：必须满足以下条件之一才允许写入索引项：
+            // 条件1：当前索引文件为空
+            // 条件2：要写入的位移大于当前所有已写入的索引项的位移——Kafka规定索引项中的位移值必须是单调增加的（后续使用二分）
             if (entries() == 0 || offset > lastOffset) {
                 log.trace("Adding index entry {} => {} to {}", offset, position, file().getAbsolutePath());
                 // put offset
@@ -163,8 +173,10 @@ public class OffsetIndex extends AbstractIndex {
                 mmap().putInt(relativeOffset(offset));
                 // put position
                 mmap().putInt(position);
+                // 第4步：更新其他元数据统计信息，如当前索引项计数器_entries和当前索引项最新位移值_lastOffset
                 incrementEntries();
                 lastOffset = offset;
+                // 第5步：执行校验。写入的索引项格式必须符合要求，即索引项个数*单个索引项占用字节数匹配当前文件物理大小，否则说明文件已损坏
                 if (entries() * ENTRY_SIZE != mmap().position())
                     throw new IllegalStateException(entries() + " entries but file position in index is " + mmap().position());
             } else

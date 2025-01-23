@@ -42,6 +42,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * Methods of this class are thread safe. Make sure to check `AbstractIndex` subclasses
  * documentation to establish their thread safety.
  */
+// 实现索引项延迟加载。这个类主要是为了提高性能
 public class LazyIndex<T extends AbstractIndex> implements Closeable {
 
     private enum IndexType {

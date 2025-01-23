@@ -56,8 +56,11 @@ import java.nio.MappedByteBuffer;
  * 后面 4 个字节表示相对 offset，等价于 OffsetIndex 索引项的前 4 个字节
  *
  */
+// 定义时间戳索引，保存“< 时间戳，相对位移值 >”对
+// 在保存同等数量索引项的基础上，TimeIndex 会比 OffsetIndex 占用更多的磁盘空间
 public class TimeIndex extends AbstractIndex {
     private static final Logger log = LoggerFactory.getLogger(TimeIndex.class);
+    // 8+4
     private static final int ENTRY_SIZE = 12;
 
     private volatile TimestampOffset lastEntry;
@@ -188,6 +191,7 @@ public class TimeIndex extends AbstractIndex {
     public void maybeAppend(long timestamp, long offset, boolean skipFullCheck) {
         lock.lock();
         try {
+            // 如果索引文件已写满，抛出异常
             if (!skipFullCheck && isFull())
                 throw new IllegalArgumentException("Attempt to append to a full time index (size = " + entries() + ").");
 
@@ -197,9 +201,11 @@ public class TimeIndex extends AbstractIndex {
             // because that could happen in the following two scenarios:
             // 1. A log segment is closed.
             // 2. LogSegment.onBecomeInactiveSegment() is called when an active log segment is rolled.
+            // 确保索引单调增加性
             if (entries() != 0 && offset < lastEntry.offset)
                 throw new InvalidOffsetException("Attempt to append an offset (" + offset + ") to slot " + entries()
                     + " no larger than the last offset appended (" + lastEntry.offset + ") to " + file().getAbsolutePath());
+            // 确保时间戳的单调增加性
             if (entries() != 0 && timestamp < lastEntry.timestamp)
                 throw new IllegalStateException("Attempt to append a timestamp (" + timestamp + ") to slot " + entries()
                     + " no larger than the last timestamp appended (" + lastEntry.timestamp + ") to " + file().getAbsolutePath());
@@ -210,9 +216,13 @@ public class TimeIndex extends AbstractIndex {
             if (timestamp > lastEntry.timestamp) {
                 log.trace("Adding index entry {} => {} to {}.", timestamp, offset, file().getAbsolutePath());
                 MappedByteBuffer mmap = mmap();
+                // 向mmap写入时间戳
                 mmap.putLong(timestamp);
+                // 向mmap写入相对位移值
                 mmap.putInt(relativeOffset(offset));
+                // 更新索引项个数
                 incrementEntries();
+                // 更新当前最新的索引项
                 this.lastEntry = new TimestampOffset(timestamp, offset);
                 if (entries() * ENTRY_SIZE != mmap.position())
                     throw new IllegalStateException(entries() + " entries but file position in index is " + mmap.position());

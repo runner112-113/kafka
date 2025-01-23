@@ -35,18 +35,29 @@ public class LogAppendInfo {
             RecordBatch.NO_TIMESTAMP, -1L, RecordBatch.NO_TIMESTAMP, -1L,
             RecordValidationStats.EMPTY, CompressionType.NONE, -1, -1L);
 
+    // 消息集合第一条消息的位移值
     private long firstOffset;
+    // 消息集合最后一条消息的位移值
     private long lastOffset;
+    // 消息集合最大消息时间戳
     private long maxTimestamp;
+    // 消息集合最大消息时间戳所属消息的位移值
     private long shallowOffsetOfMaxTimestamp;
+    // 写入消息时间戳
     private long logAppendTime;
+    // 消息集合首条消息的位移值
     private long logStartOffset;
+    // 消息转换统计类，里面记录了执行了格式转换的消息数等数据
     private RecordValidationStats recordValidationStats;
 
     private final OptionalInt lastLeaderEpoch;
+    // 消息集合中消息使用的压缩器（Compressor）类型，比如是Snappy还是LZ4
     private final CompressionType sourceCompression;
+    // 写入消息总字节数
     private final int validBytes;
+    // 首个消息批次中最后一条消息的位移
     private final long lastOffsetOfFirstBatch;
+    // 写入消息时出现的异常列表
     private final List<RecordError> recordErrors;
     private final LeaderHwChange leaderHwChange;
 

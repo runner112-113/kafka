@@ -353,15 +353,23 @@ class LocalLog(@volatile private var _dir: File,// 这个日志所在的文件�
       trace(s"Reading maximum $maxLength bytes at offset $startOffset from log with " +
         s"total length ${segments.sizeInBytes} bytes")
 
+      // 读取消息时没有使用Monitor锁同步机制，因此这里取巧了，用本地变量的方式把LEO对象保存起来，避免争用（race condition）
       val endOffsetMetadata = nextOffsetMetadata
+      // 高水位值
       val endOffset = endOffsetMetadata.messageOffset
+      // 找到startOffset值所在的日志段对象。注意要使用floorEntry方法（跳表）
       var segmentOpt = segments.floorSegment(startOffset)
 
       // return error on attempt to read beyond the log end offset
+      // 满足以下条件之一将被视为消息越界，即你要读取的消息不在该Log对象中：
+      // 1. 要读取的消息位移超过了LEO值
+      // 2. 没找到对应的日志段对象
+      // 3. 要读取的消息在Log Start Offset之下，同样是对外不可见的消息
       if (startOffset > endOffset || !segmentOpt.isPresent)
         throw new OffsetOutOfRangeException(s"Received request for offset $startOffset for partition $topicPartition, " +
           s"but we only have log segments upto $endOffset.")
 
+      // startOffset >= 最大可见位移（比如：高水位） 返回空对象
       if (startOffset == maxOffsetMetadata.messageOffset)
         emptyFetchDataInfo(maxOffsetMetadata, includeAbortedTxns)
       else if (startOffset > maxOffsetMetadata.messageOffset)
@@ -371,8 +379,11 @@ class LocalLog(@volatile private var _dir: File,// 这个日志所在的文件�
         // but if that segment doesn't contain any messages with an offset greater than that
         // continue to read from successive segments until we get some messages or we reach the end of the log
         var fetchDataInfo: FetchDataInfo = null
+        // 开始遍历日志段对象，直到读出东西来或者读到日志末尾
+        // 不会跨日志段读取，从一个日志段获取到日之后就返回数据
         while (fetchDataInfo == null && segmentOpt.isPresent) {
           val segment = segmentOpt.get
+          // 当前segment的起始位移
           val baseOffset = segment.baseOffset
 
           // 1. If `maxOffsetMetadata#segmentBaseOffset < segment#baseOffset`, then return maxPosition as empty.
@@ -387,11 +398,14 @@ class LocalLog(@volatile private var _dir: File,// 这个日志所在的文件�
             else
               Optional.empty()
 
+          // 调用日志段对象的read方法执行真正的读取消息操作
           fetchDataInfo = segment.read(startOffset, maxLength, maxPositionOpt, minOneMessage)
           if (fetchDataInfo != null) {
             if (includeAbortedTxns)
               fetchDataInfo = addAbortedTransactions(startOffset, segment, fetchDataInfo)
-          } else segmentOpt = segments.higherSegment(baseOffset)
+          } else
+          // 如果没有返回任何消息，去下一个日志段对象试试
+            segmentOpt = segments.higherSegment(baseOffset)
         }
 
         if (fetchDataInfo != null) fetchDataInfo
@@ -399,6 +413,7 @@ class LocalLog(@volatile private var _dir: File,// 这个日志所在的文件�
           // okay we are beyond the end of the last segment with no data fetched although the start offset is in range,
           // this can happen when all messages with offset larger than start offsets have been deleted.
           // In this case, we will return the empty set with log end offset metadata
+          // 已经读到日志末尾还是没有数据返回，只能返回空消息集合
           new FetchDataInfo(nextOffsetMetadata, MemoryRecords.EMPTY)
         }
       }
@@ -406,7 +421,9 @@ class LocalLog(@volatile private var _dir: File,// 这个日志所在的文件�
   }
 
   private[log] def append(lastOffset: Long, largestTimestamp: Long, shallowOffsetOfMaxTimestamp: Long, records: MemoryRecords): Unit = {
+    // 消息写入active日志段
     segments.activeSegment.append(lastOffset, largestTimestamp, shallowOffsetOfMaxTimestamp, records)
+    // 更新LEO值
     updateLogEndOffset(lastOffset + 1)
   }
 

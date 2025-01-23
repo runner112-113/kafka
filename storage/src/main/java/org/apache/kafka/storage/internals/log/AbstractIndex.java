@@ -39,6 +39,7 @@ import java.util.concurrent.locks.ReentrantLock;
 /**
  * The abstract index class which holds entry format agnostic methods.
  */
+// 封装了所有索引类型的公共操作
 public abstract class AbstractIndex implements Closeable {
 
     private enum SearchResultType {
@@ -49,10 +50,18 @@ public abstract class AbstractIndex implements Closeable {
 
     protected final ReentrantLock lock = new ReentrantLock();
 
+    // 索引对象对应日志段对象的起始位移值。举个例子，如果你查看 Kafka 日志路径的话，就会发现，日志文件和索引文件都是成组出现的。
+    // 比如说，如果日志文件是 00000000000000000123.log，正常情况下，一定还有一组索引文件 00000000000000000123.index、00000000000000000123.timeindex 等。
+    // 这里的“123”就是这组文件的起始位移值，也就是 baseOffset 值
     private final long baseOffset;
+    // 它控制索引文件的最大长度。Kafka 源码传入该参数的值是 Broker 端参数 segment.index.bytes 的值，即 10MB。
+    // 这就是在默认情况下，所有 Kafka 索引文件大小都是 10MB 的原因
     private final int maxIndexSize;
+    // True”表示以“读写”方式打开，“False”表示以“只读”方式打开
     private final boolean writable;
 
+    // 每个索引对象在磁盘上都对应了一个索引文件。你可能注意到了，这个字段是 var 型，说明它是可以被修改的。
+    // 难道索引对象还能动态更换底层的索引文件吗？是的。自 1.1.0 版本之后，Kafka 允许迁移底层的日志路径，所以，索引文件自然要是可以更换的。
     private volatile File file;
 
     // Length of the index file
@@ -65,6 +74,7 @@ public abstract class AbstractIndex implements Closeable {
      */
     private volatile int maxEntries;
     /** The number of entries in this index */
+    // 表示不同索引项的大小
     private volatile int entries;
 
 
@@ -87,9 +97,11 @@ public abstract class AbstractIndex implements Closeable {
     }
 
     private void createAndAssignMmap() throws IOException {
+        // 第1步：创建索引文件
         boolean newlyCreated = file.createNewFile();
         RandomAccessFile raf;
         if (writable)
+            // 第2步：以writable指定的方式（读写方式或只读方式）打开索引文件
             raf = new RandomAccessFile(file, "rw");
         else
             raf = new RandomAccessFile(file, "r");
@@ -97,12 +109,17 @@ public abstract class AbstractIndex implements Closeable {
         try {
             /* pre-allocate the file if necessary */
             if (newlyCreated) {
+                // 预设的索引文件大小不能太小，如果连一个索引项都保存不了，直接抛出异常
                 if (maxIndexSize < entrySize())
                     throw new IllegalArgumentException("Invalid max index size: " + maxIndexSize);
+                // 第3步：设置索引文件长度，roundDownToExactMultiple计算的是不超过maxIndexSize的最大整数倍entrySize
+                // 比如maxIndexSize=1234567，entrySize=8，那么调整后的文件长度为1234560
                 raf.setLength(roundDownToExactMultiple(maxIndexSize, entrySize()));
             }
 
+            // 第4步：更新索引长度字段_length
             long length = raf.length();
+            // 第5步：创建MappedByteBuffer对象
             MappedByteBuffer mmap = createMappedBuffer(raf, newlyCreated, length, writable, entrySize());
 
             this.length = length;
@@ -122,7 +139,10 @@ public abstract class AbstractIndex implements Closeable {
     /**
      * Remove all entries from the index which have an offset greater than or equal to the given offset.
      * Truncating to an offset larger than the largest in the index has no effect.
+     *
+     * @param offset  要截取到哪个槽
      */
+    // 将索引文件内容直接裁剪掉一部分
     public abstract void truncateTo(long offset);
 
     /**
@@ -137,9 +157,10 @@ public abstract class AbstractIndex implements Closeable {
      * To parse an entry in the index.
      *
      * @param buffer the buffer of this memory mapped index.
-     * @param n the slot
+     * @param n the slot  查找给定 ByteBuffer 中保存的第 n 个索引项（在 Kafka 中也称第 n 个槽）
      * @return the index entry stored in the given slot.
      */
+    // 查找给定的索引项
     protected abstract IndexEntry parseEntry(ByteBuffer buffer, int n);
 
     /**
@@ -308,6 +329,7 @@ public abstract class AbstractIndex implements Closeable {
      */
     public int relativeOffset(long offset) {
         OptionalInt relativeOffset = toRelative(offset);
+        // 如果无法转换成功（比如差值超过了整型表示范围)，则抛出异常
         return relativeOffset.orElseThrow(() -> new IndexOffsetOverflowException(
             "Integer overflow for offset: " + offset + " (" + file.getAbsoluteFile() + ")"));
     }
@@ -470,12 +492,15 @@ public abstract class AbstractIndex implements Closeable {
             idx = raf.getChannel().map(FileChannel.MapMode.READ_ONLY, 0, length);
 
         /* set the position in the index for the next entry */
+        // 第6步：如果是新创建的索引文件，将MappedByteBuffer对象的当前位置置成0
+        // 如果索引文件已存在，将MappedByteBuffer对象的当前位置设置成最后一个索引项所在的位置
         if (newlyCreated)
             idx.position(0);
         else
             // if this is a pre-existing index, assume it is valid and set position to last entry
             idx.position(roundDownToExactMultiple(idx.limit(), entrySize));
 
+        // 第7步：返回创建的MappedByteBuffer对象
         return idx;
     }
 
@@ -485,17 +510,24 @@ public abstract class AbstractIndex implements Closeable {
     private int indexSlotRangeFor(ByteBuffer idx, long target, IndexSearchType searchEntity,
                                   SearchResultType searchResultType) {
         // check if the index is empty
+        // 第1步：如果索引为空，直接返回<-1,-1>对
         if (entries == 0)
             return -1;
 
+        // 第3步：确认热区首个索引项位于哪个槽。_warmEntries就是所谓的分割线，目前固定为8192字节处 、
+        // 如果是OffsetIndex，_warmEntries = 8192 / 8 = 1024，即第1024个槽
+        // 如果是TimeIndex，_warmEntries = 8192 / 12 = 682，即第682个槽
         int firstHotEntry = Math.max(0, entries - 1 - warmEntries());
         // check if the target offset is in the warm section of the index
+        // 第4步：判断target位移值在热区还是冷区
         if (compareIndexEntry(parseEntry(idx, firstHotEntry), target, searchEntity) < 0) {
+            // 如果在热区，搜索热区
             return binarySearch(idx, target, searchEntity,
                 searchResultType, firstHotEntry, entries - 1);
         }
 
         // check if the target offset is smaller than the least offset
+        // 第5步：确保target位移值不能小于当前最小位移值
         if (compareIndexEntry(parseEntry(idx, 0), target, searchEntity) > 0) {
             switch (searchResultType) {
                 case LARGEST_LOWER_BOUND:
@@ -505,6 +537,7 @@ public abstract class AbstractIndex implements Closeable {
             }
         }
 
+        // 第6步：如果在冷区，搜索冷区
         return binarySearch(idx, target, searchEntity, searchResultType, 0, firstHotEntry);
     }
 

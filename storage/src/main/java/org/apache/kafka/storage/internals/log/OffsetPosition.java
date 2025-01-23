@@ -22,7 +22,9 @@ package org.apache.kafka.storage.internals.log;
  * given offset.
  */
 public final class OffsetPosition implements IndexEntry {
+    // 索引项中的完整位移值
     public final long offset;
+    // 位移值上消息在日志段文件中的物理位置
     public final int position;
 
     public OffsetPosition(long offset, int position) {

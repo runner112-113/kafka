@@ -159,6 +159,7 @@ public class LogValidator {
                                                              MetricsRecorder metricsRecorder,
                                                              BufferSupplier bufferSupplier) {
         if (sourceCompressionType == CompressionType.NONE && targetCompression.type() == CompressionType.NONE) {
+            // 没有压缩
             // check the magic value
             if (!records.hasMatchingMagic(toMagic))
                 return convertAndAssignOffsetsNonCompressed(offsetCounter, metricsRecorder);
