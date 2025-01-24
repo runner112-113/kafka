@@ -102,8 +102,9 @@ class SocketServer(val config: KafkaConfig,
   private[network] val dataPlaneAcceptors = new ConcurrentHashMap[EndPoint, DataPlaneAcceptor]()
   // processors和handlers数据交互
   val dataPlaneRequestChannel = new RequestChannel(maxQueuedRequests, DataPlaneAcceptor.MetricPrefix, time, apiVersionManager.newRequestMetrics)
-  // control-plane
+  // control-plane  Option类型
   private[network] var controlPlaneAcceptorOpt: Option[ControlPlaneAcceptor] = None
+  // 通过control.plane.listener.name判断是否开启了control plane
   // 对列长20
   val controlPlaneRequestChannelOpt: Option[RequestChannel] = config.controlPlaneListenerName.map(_ =>
     new RequestChannel(20, ControlPlaneAcceptor.MetricPrefix, time, apiVersionManager.newRequestMetrics))
@@ -177,7 +178,9 @@ class SocketServer(val config: KafkaConfig,
   if (apiVersionManager.listenerType.equals(ListenerType.CONTROLLER)) {
     config.controllerListeners.foreach(createDataPlaneAcceptorAndProcessors)
   } else {
+    // 控制平面Acceptor和Processor创建
     config.controlPlaneListener.foreach(createControlPlaneAcceptorAndProcessor)
+    // 数据平面Acceptor和Processor创建
     config.dataPlaneListeners.foreach(createDataPlaneAcceptorAndProcessors)
   }
 
@@ -255,6 +258,7 @@ class SocketServer(val config: KafkaConfig,
       config.interBrokerListenerName == endpoint.listenerName
     val dataPlaneAcceptor = createDataPlaneAcceptor(endpoint, isPrivilegedListener, dataPlaneRequestChannel)
     config.addReconfigurable(dataPlaneAcceptor)
+    // 配置Processor
     dataPlaneAcceptor.configure(parsedConfigs)
     dataPlaneAcceptors.put(endpoint, dataPlaneAcceptor)
     info(s"Created data-plane acceptor and processors for endpoint : ${endpoint.listenerName}")
@@ -536,6 +540,9 @@ object ControlPlaneAcceptor {
   val MetricPrefix = "ControlPlane"
 }
 
+/**
+ * 控制平台的Acceptor
+ */
 class ControlPlaneAcceptor(socketServer: SocketServer,
                            endPoint: EndPoint,
                            config: KafkaConfig,
