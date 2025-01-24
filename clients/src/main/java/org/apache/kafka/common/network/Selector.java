@@ -483,7 +483,7 @@ public class Selector implements Selectable, AutoCloseable {
         /* check ready keys */
         long startSelect = time.nanoseconds();
         // nio select
-        // 阻塞select
+        // select with timeout
         int numReadyKeys = select(timeout);
         long endSelect = time.nanoseconds();
         this.sensors.selectTime.record(endSelect - startSelect, time.milliseconds(), false);
@@ -546,6 +546,7 @@ public class Selector implements Selectable, AutoCloseable {
                 /* complete any connections that have finished their handshake (either normally or immediately) */
                 if (isImmediatelyConnected || key.isConnectable()) {
                     if (channel.finishConnect()) {
+                        // 连接建立成功
                         this.connected.add(nodeId);
                         this.sensors.connectionCreated.record();
 
@@ -654,6 +655,7 @@ public class Selector implements Selectable, AutoCloseable {
     private void attemptWrite(SelectionKey key, KafkaChannel channel, long nowNanos) throws IOException {
         if (channel.hasSend()
                 && channel.ready()
+                // writable
                 && key.isWritable()
                 && !channel.maybeBeginClientReauthentication(() -> nowNanos)) {
             write(channel);
@@ -663,6 +665,7 @@ public class Selector implements Selectable, AutoCloseable {
     // package-private for testing
     void write(KafkaChannel channel) throws IOException {
         String nodeId = channel.id();
+        // write data
         long bytesSent = channel.write();
         NetworkSend send = channel.maybeCompleteSend();
         // We may complete the send with bytesSent < 1 if `TransportLayer.hasPendingWrites` was true and `channel.write()`
@@ -1073,6 +1076,7 @@ public class Selector implements Selectable, AutoCloseable {
         if (hasCompletedReceive(channel))
             throw new IllegalStateException("Attempting to add second completed receive to channel " + channel.id());
 
+        // 放到完成接收的请求集合
         this.completedReceives.put(channel.id(), networkReceive);
         sensors.recordCompletedReceive(channel.id(), networkReceive.size(), currentTimeMs);
     }

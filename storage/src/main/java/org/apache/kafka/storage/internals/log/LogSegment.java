@@ -496,6 +496,7 @@ public class LogSegment implements Closeable {
         // 读取对应的消息数据，并封装成 FetchDataInfo 对象返回
         return new FetchDataInfo(offsetMetadata,
                 // 从指定位置读取指定大小的消息集合
+                // 注意此处返回的是FileRecords,后面会使用zero-copy写回
                 log.slice(startPosition, fetchSize),
             adjustedMaxSize < startOffsetAndSize.size, Optional.empty());
     }

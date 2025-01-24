@@ -704,7 +704,7 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
 
   /**
    * Accept loop that checks for new connection attempts
-   * Acceptor线程
+   * Acceptor线程 - 主Reactor
    */
   override def run(): Unit = {
     // 注册OP_ACCEPT事件
@@ -712,6 +712,7 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
     try {
       while (shouldRun.get()) {
         try {
+          // accept
           acceptNewConnections()
           closeThrottledConnections()
         }
@@ -788,6 +789,7 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
               do {
                 retriesLeft -= 1
                 // 指定由哪个Processor线程进行处理
+                // 每个Processor线程有自己的Selector,
                 processor = synchronized {
                   // adjust the index (if necessary) and retrieve the processor atomically for
                   // correct behaviour in case the number of processors is reduced dynamically
@@ -861,6 +863,7 @@ private[kafka] abstract class Acceptor(val socketServer: SocketServer,
 
   private def assignNewConnection(socketChannel: SocketChannel, processor: Processor, mayBlock: Boolean): Boolean = {
     // 将 SocketChannel 交给 Processor 进行处理
+    // 写入到processor的newConnection队列
     if (processor.accept(socketChannel, mayBlock, blockedPercentMeter)) {
       debug(s"Accepted connection from ${socketChannel.socket.getRemoteSocketAddress} on" +
         s" ${socketChannel.socket.getLocalSocketAddress} and assigned it to processor ${processor.id}," +
@@ -1045,7 +1048,8 @@ private[kafka] class Processor(
       while (shouldRun.get()) {
         try {
           // setup any new connections that have been queued up
-          // 遍历获取分配给当前 Processor 的 SocketChannel 对象，注册 OP_READ 事件
+          // 遍历newConnections获取分配给当前Processor的新的SocketChannel对象，注册 OP_READ 事件
+          // 即处理新的连接对象
           configureNewConnections()
           // register any new responses for writing
           // 遍历处理当前 Processor 的响应队列，依据响应类型进行处理
@@ -1154,6 +1158,7 @@ private[kafka] class Processor(
     // removed from the Selector after discarding any pending staged receives.
     // `openOrClosingChannel` can be None if the selector closed the connection because it was idle for too long
     if (openOrClosingChannel(connectionId).isDefined) { // 如果该连接处于可连接状态
+      // 设置send，并添加OP_WRITE感兴趣事件
       selector.send(new NetworkSend(connectionId, responseSend))
       inflightResponses += (connectionId -> response)
     }
@@ -1161,6 +1166,7 @@ private[kafka] class Processor(
 
   private def poll(): Unit = {
     val pollTimeout = if (newConnections.isEmpty) 300 else 0
+    // select
     try selector.poll(pollTimeout)
     catch {
       case e @ (_: IllegalStateException | _: IOException) =>
@@ -1185,6 +1191,7 @@ private[kafka] class Processor(
       try {
         openOrClosingChannel(receive.source) match {
           case Some(channel) =>
+            // 解析请求
             val header = parseRequestHeader(receive.payload)
             if (header.apiKey == ApiKeys.SASL_HANDSHAKE && channel.maybeBeginServerReauthentication(receive,
               () => time.nanoseconds()))
