@@ -799,6 +799,7 @@ class ReplicaManager(val config: KafkaConfig,
     }
 
     val sTime = time.milliseconds
+    // 添加到主副本
     val localProduceResults = appendToLocalLog(internalTopicsAllowed = internalTopicsAllowed,
       origin, entriesPerPartition, requiredAcks, requestLocal, verificationGuards.toMap)
     debug("Produce to local log in %d ms".format(time.milliseconds - sTime))
