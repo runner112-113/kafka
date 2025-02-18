@@ -539,6 +539,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             client.pollNoWakeup();
         }
 
+        // 判断是否自动提交偏移量
         maybeAutoCommitOffsetsAsync(timer.currentTimeMs());
         return true;
     }
