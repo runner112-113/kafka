@@ -27,6 +27,7 @@ import java.util.stream.Collectors;
  */
 public class TopicPartitionInfo {
     private final int partition;
+    // 分区首领所在的Node
     private final Node leader;
     private final List<Node> replicas;
     private final List<Node> isr;

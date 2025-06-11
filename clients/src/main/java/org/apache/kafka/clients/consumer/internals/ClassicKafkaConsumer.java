@@ -652,6 +652,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
             }
 
             do {
+                // 调用client.wakeup方法，此处会抛出WakeupException异常
                 client.maybeTriggerWakeup();
 
                 if (includeMetadataInTimeout) {
@@ -661,6 +662,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                 } else {
                     // 不包含获取元数据的时间所以time.timer(Long.MAX_VALUE)
                     // ConsumerCoordinator处理（自动提交offset 等）
+                    // 如果远端Broker不可用，那么consumer程序会被无限阻塞下去
                     while (!updateAssignmentMetadataIfNeeded(time.timer(Long.MAX_VALUE), true)) {
                         log.warn("Still waiting for metadata");
                     }

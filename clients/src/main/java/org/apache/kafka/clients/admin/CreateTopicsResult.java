@@ -31,7 +31,7 @@ import java.util.stream.Collectors;
  * The API of this class is evolving, see {@link Admin} for details.
  */
 @InterfaceStability.Evolving
-public class CreateTopicsResult {
+public class  CreateTopicsResult {
     static final int UNKNOWN = -1;
 
     private final Map<String, KafkaFuture<TopicMetadataAndConfig>> futures;

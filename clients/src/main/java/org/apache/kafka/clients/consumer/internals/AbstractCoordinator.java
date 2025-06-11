@@ -1148,6 +1148,7 @@ public abstract class AbstractCoordinator implements Closeable {
             // needs this lock to complete and terminate after close flag is set.
             synchronized (this) {
                 if (rebalanceConfig.leaveGroupOnClose) {
+                    // 会触发invokePartitionsRevoked或者invokePartitionsLost回调
                     onLeavePrepare();
                     maybeLeaveGroup("the consumer is being closed");
                 }

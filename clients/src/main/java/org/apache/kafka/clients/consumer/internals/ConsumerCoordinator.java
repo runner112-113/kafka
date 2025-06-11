@@ -996,6 +996,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // we do not need to re-enable wakeups since we are closing already
         client.disableWakeups();
         try {
+            // 提交位移
             maybeAutoCommitOffsetsSync(timer);
             while (pendingAsyncCommits.get() > 0 && timer.notExpired()) {
                 ensureCoordinatorReady(timer);
